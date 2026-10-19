@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.env
+# Never commit keys
+*service-account*.json
+credentials*.json
+.n8n-key
+# Read-only database URL to share for querying
+.reader-url
+# ServerSupply runs on a PC (serversupply/run.bat)
+.venv-serversupply/
+serversupply/.chrome-profile/

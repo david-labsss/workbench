@@ -1,0 +1,34 @@
+﻿name: QA DirectMacro
+
+# Re-checks 25 random products of a saved DirectMacro run on the store and logs them in qa_checks,
+# where the dashboard shows "QA passed / failed". The scrape workflow does this after every run;
+# this one is for checking a run by hand (again: a new QA, the old one is kept).
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "The run to check (blank = the latest saved full run)"
+        required: false
+        default: ""
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: QA
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          QA_DB_PASSWORD: ${{ secrets.QA_DB_PASSWORD }}
+          QA_RUN_ID: ${{ inputs.run_id || 'latest' }}
+        run: python -u -m directmacro.qa
