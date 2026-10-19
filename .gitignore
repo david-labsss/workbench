@@ -8,5 +8,6 @@ credentials*.json
 # Read-only database URL to share for querying
 .reader-url
 # ServerSupply runs on a PC (serversupply/run.bat)
+.venv/
 .venv-serversupply/
 serversupply/.chrome-profile/
