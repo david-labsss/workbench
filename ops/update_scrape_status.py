@@ -30,24 +30,13 @@ LOCAL_SA = r"D:\Server Part Deals\service-account.json"             # only used 
 SHEET_ID = "16wJ7P8FmUG3DjOAZ6F9RnJDCb7FsXTqDb_eXdsc2boU"
 STATUS_COL = 18  # column R
 
-# Stores with a KNOWN non-live state, keyed by DOMAIN so the status holds whether or not a scraper
-# folder happens to be present in the checkout (keeps the cloud run and local run identical).
-# Everything that isn't live and isn't listed here is "Not built yet".
-CURATED = {
-    "gotodirect.com": "On hold (needs sharding)",
-    "servertechcentral.com": "Dropped (fake data)",
-    "techbuyer.com": "Blocked (paid-only)",
-    "it-market.com": "Blocked (paid-only)",
-    "techatlantix.com": "Blocked (Cloudflare)",
-    "memory4less.com": "Blocked (Cloudflare)",
-    "servermonkey.com": "Blocked (Turnstile, no free path)",
-    "ipc-computer.eu": "Blocked",
-    "serverflake.com": "Built, not live (untested)",
-    "cpumedics.com": "Built, not live (untested)",
-    "serverparts4less.com": "Built, not live (untested)",
-    "eurolanditstore.co.uk": "Built, not live (quote-only)",
-    "wearesync.co.uk": "Built, not live",
-}
+# Stores with a KNOWN non-live state (blocked / quote-only / no-catalogue / duplicate / building /
+# on-hold / dropped), keyed by DOMAIN so the status holds whether or not a scraper folder is in the
+# checkout (cloud and local runs stay identical). Maintained in ops/store_status.json (generated
+# from the 108-store recon). A store that is in live_sites.json wins ("Scraped") even if listed
+# here (e.g. a "Building" entry becomes "Scraped" once the scraper goes live). Anything not live
+# and not here is "Not built yet".
+CURATED = json.load(open(os.path.join(HERE, "store_status.json"), encoding="utf-8"))
 # Scrapers whose target domain differs from / isn't parsed from a BASE var.
 DOMAIN_OVERRIDE = {
     "staples": "staples.com",
