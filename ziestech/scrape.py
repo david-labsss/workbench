@@ -34,7 +34,7 @@ import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from common import http, runner, schema
 
@@ -115,31 +115,50 @@ def month_windows(now, first_year):
     return list(zip(edges, edges[1:]))
 
 
-def fetch_window(window, limit=0):
-    """Every product created in [start, end), oldest first. A listing stops at 25k, so when it
-    nears the cap we start a new listing from the last createdAt seen; overlap is removed by id."""
-    start, end = window
-    by_id, after, frm, depth = {}, None, start, 0
+def _iso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _collect_range(start_dt, end_dt, out, limit):
+    """Page [start, end) oldest-first by createdAt. A single Shopify listing can't be paged past
+    25k, so if this range holds more than that (still hasNextPage at the cap) we split the time
+    range in half and recurse — each leaf range is under the cap and fully paged. Overlap between
+    ranges is removed by product id (out is keyed by id)."""
+    q = f"created_at:>='{_iso(start_dt)}' AND created_at:<'{_iso(end_dt)}'"
+    after, depth = None, 0
     while True:
-        q = f"created_at:>='{frm}' AND created_at:<'{end}'"
+        if limit and len(out) >= limit:
+            return
         page = gql(LIST_QUERY, {"first": PAGE, "after": after, "query": q})["products"]
         for n in page["nodes"]:
-            by_id[n["id"]] = n
+            out[n["id"]] = n
         depth += len(page["nodes"])
-        if not page["pageInfo"]["hasNextPage"] or (limit and len(by_id) >= limit):
-            break
+        if not page["pageInfo"]["hasNextPage"]:
+            return
         if depth + PAGE > CAP:
-            last = page["nodes"][-1]["createdAt"]
-            if last == frm:
-                print(f"WARN 25k+ products created at {last}; only 25k are reachable", flush=True)
-                break
-            frm, after, depth = last, None, 0
-        else:
-            after = page["pageInfo"]["endCursor"]
+            # Range too big for deep paging; bisect on time and recurse.
+            if end_dt - start_dt <= timedelta(seconds=1):
+                print(f"WARN 25k+ products created within one second at {_iso(start_dt)}; "
+                      "only ~25k are reachable", flush=True)
+                return
+            mid = start_dt + (end_dt - start_dt) / 2
+            _collect_range(start_dt, mid, out, limit)
+            _collect_range(mid, end_dt, out, limit)
+            return
+        after = page["pageInfo"]["endCursor"]
         time.sleep(PAGE_DELAY)
-    if by_id:
-        print(f"created {start[:7]}: {len(by_id)} products", flush=True)
-    return list(by_id.values())
+
+
+def fetch_window(window, limit=0):
+    """Every product created in [start, end) (ISO strings), de-duped by id, with any over-cap
+    sub-range split finer automatically."""
+    start, end = window
+    out = {}
+    _collect_range(datetime.fromisoformat(start.replace("Z", "+00:00")),
+                   datetime.fromisoformat(end.replace("Z", "+00:00")), out, limit)
+    if out:
+        print(f"created {start[:7]}: {len(out)} products", flush=True)
+    return list(out.values())
 
 
 def fetch_all(limit=0):
