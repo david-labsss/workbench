@@ -12,7 +12,8 @@ id. Same approach as esaitech / orangehardwares. Prices are asked for the US mar
 One row per variant: product_id is the variant id, parent_id the product id. Price is the variant
 price, compare_at_price its compare-at price (only when above the price; the store often sends
 0.0), in stock = availableForSale. The store doesn't publish stock counts (quantityAvailable is
-access-denied), so stock_qty stays blank.
+access-denied), so stock_qty stays blank. image_url = the variant's image, else the product's
+featured image; description = descriptionHtml as plain text (both from the same query).
 
 Fields are messy (the catalogue is merged from several feeds), so:
   brand      the "Brand_<name>" tag when there is one, else the vendor. The vendor is often the
@@ -33,6 +34,18 @@ Fields are messy (the catalogue is merged from several feeds), so:
   capacity   first upper-case GB/TB size in the title, for drives / memory only (judged by the
              product type, or by the title when the product type is blank).
 
+Quote-only: since 2026-10 the store's theme shows no prices at all. Every product page has a
+"Request a quote" panel (data-alo-rfq-panel) instead of the price block and Add-to-Cart button,
+and listing cards show only a "Request a Quote" button. Shopify still holds a price for each
+variant (often a placeholder, e.g. $594,915 for a used ME484 array), but no visitor can see or pay
+it, so it isn't a selling price. Nothing in the product data marks this (no tag, template suffix
+or metafield), so each run opens a few random product pages: when they show the quote panel and
+no price, every row is saved with price = None (products are kept, as with $0 quote items), and
+available = None too: those pages show no stock either ("availability ... confirmed by our sales
+team"), while availableForSale is true for everything. When
+the pages show prices again, prices are saved as before; if only some do (an unknown per-product
+rule) or no page can be checked, prices are left out and a warning says so.
+
 The product count comes from the store's root (English) product sitemaps (1,000 per file; the
 sitemap index also lists 9 locale copies, which are ignored), read from the index plus the first
 and last file: 3 requests. It is only a completeness check, so a truncated crawl is never saved
@@ -48,6 +61,7 @@ Env vars:
   DRY_RUN             optional, "1" = print sample rows, don't write anything
 """
 import os
+import random
 import re
 import sys
 import threading
@@ -72,6 +86,9 @@ WORKERS = 4           # low concurrency: be polite
 PAGE_DELAY = 0.3      # small pause between pages within a window
 USER_AGENT = "aloinfousa-scraper/1.0 (price monitoring)"
 PLACEHOLDER_VENDORS = {"", "major brand", "n/a", "na", "none", "unknown", "generic"}
+QUOTE_SAMPLE = 6      # product pages opened each run to see whether prices are shown
+QUOTE_PANEL = "data-alo-rfq-panel"                     # the theme's "Request a quote" box
+PRICE_BLOCK_RE = re.compile(r'class="[^"]*\bprice-list\b')  # the theme's price element
 
 CAPACITY_RE = re.compile(r"\b(\d+(?:\.\d+)?)\s*(TB|GB)\b")   # upper-case only: "8Gb" is a link speed
 STORAGE_RE = re.compile(r"\b(hdd|ssd|drives?|hard\s*drives?|memory|ram|dimms?|rdimm|lrdimm|"
@@ -114,9 +131,11 @@ STRIP = "()[]{},;:|\"'*"
 _local = threading.local()
 _token = None
 
-VARIANT_FIELDS = "id sku title price { amount } compareAtPrice { amount } availableForSale"
+VARIANT_FIELDS = ("id sku title price { amount } compareAtPrice { amount } availableForSale "
+                  "image { url }")
 PRODUCT_FIELDS = """
   id title handle vendor productType tags availableForSale createdAt
+  featuredImage { url } descriptionHtml
   variants(first: %d) { pageInfo { hasNextPage endCursor } nodes { %s } }
 """ % (VARIANTS, VARIANT_FIELDS)
 LIST_QUERY = """
@@ -294,6 +313,43 @@ def listed_total():
         return None
 
 
+def page_is_quote_only(html):
+    """True when a product page shows the quote panel and no price."""
+    return QUOTE_PANEL in html and not PRICE_BLOCK_RE.search(html)
+
+
+def prices_hidden(items):
+    """Open a few random product pages: True (save no prices) unless every page checked shows a
+    price. Mixed pages or no readable page also give True, with a warning: a hidden price must
+    never be saved as a selling price."""
+    handles = [n["handle"] for n in items if n.get("handle")]
+    sample = random.sample(handles, min(QUOTE_SAMPLE, len(handles)))
+    s = requests.Session()
+    s.headers["User-Agent"] = USER_AGENT
+    quote = priced = 0
+    for handle in sample:
+        try:
+            r = s.get(f"{BASE}/products/{handle}", timeout=60)
+            r.raise_for_status()
+        except Exception as e:  # noqa: BLE001 - one page less in the sample
+            print(f"WARN couldn't open /products/{handle}: {e}", flush=True)
+            continue
+        if page_is_quote_only(r.text):
+            quote += 1
+        else:
+            priced += 1
+        time.sleep(PAGE_DELAY)
+    print(f"price check: {quote} of {quote + priced} product pages are quote-only", flush=True)
+    if priced and not quote:
+        return False
+    if quote and priced:
+        print("WARN some pages show prices and some don't; the store's quote rule needs a "
+              "re-check. Saving no prices this run.", flush=True)
+    elif not quote:
+        print("WARN no product page could be checked; saving no prices this run.", flush=True)
+    return True
+
+
 # --- mapping -----------------------------------------------------------------
 def _to_float(v):
     try:
@@ -413,9 +469,13 @@ def category_of(n):
     return ptype
 
 
-def build_rows(n, scraped_at, vendors):
-    """One row per variant of a product (product_id = variant id, parent_id = product id)."""
+def build_rows(n, scraped_at, vendors, hide_prices=False):
+    """One row per variant of a product (product_id = variant id, parent_id = product id).
+    hide_prices: the store shows no prices or stock (quote-only), so price, compare-at and
+    available stay blank."""
     title = clean(n.get("title"))
+    description = schema.plain_text(n.get("descriptionHtml"))
+    product_image = (n.get("featuredImage") or {}).get("url")
     product_id = n["id"].rsplit("/", 1)[-1]
     vendor = vendor_of(n)
     brand = brand_of(n, title, vendors)
@@ -435,8 +495,8 @@ def build_rows(n, scraped_at, vendors):
         sku = clean(v.get("sku"))
         vtitle = clean(v.get("title"))
         full_title = title + ("" if vtitle in ("", "Default Title") else f" - {vtitle}")
-        price = money(v.get("price"))
-        compare = money(v.get("compareAtPrice"))
+        price = None if hide_prices else money(v.get("price"))
+        compare = None if hide_prices else money(v.get("compareAtPrice"))
         rows.append(schema.product_row({
             "scraped_at": scraped_at,
             "website": SITE,
@@ -452,8 +512,10 @@ def build_rows(n, scraped_at, vendors):
             "capacity": capacity,
             "price": price if price else None,          # $0 = no price, never 0
             "compare_at_price": compare if (compare and price and compare > price) else None,
-            "available": bool(v.get("availableForSale")),
+            "available": None if hide_prices else bool(v.get("availableForSale")),
             "stock_qty": None,   # not published by the store
+            "image_url": (v.get("image") or {}).get("url") or product_image,
+            "description": description,
             "url": f"{BASE}/products/{n.get('handle')}" + (f"?variant={vid}" if multi else ""),
         }))
     return rows
@@ -473,7 +535,8 @@ def known_vendors(items):
 def scrape(limit, scraped_at):
     items = fetch_all(limit)
     vendors = known_vendors(items)
-    rows = [row for n in items for row in build_rows(n, scraped_at, vendors)]
+    hide = prices_hidden(items)
+    rows = [row for n in items for row in build_rows(n, scraped_at, vendors, hide)]
     listed = None if limit else listed_total()
     # Product-level completeness guard (rows are per variant; products are the right unit here)
     if not limit and listed and len(items) < 0.98 * listed:

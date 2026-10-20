@@ -15,6 +15,9 @@ categories and the in-stock flag (no stock count). On top of the shared mapping:
   condition    the "New" category, or a word in the name: used -> Used, REF -> Refurbished,
                NOB -> New Open Box
   capacity     upper-case GB/TB in the name, for HDD / SSD / RAM / memory items only
+  available    None when the store prints no stock text: it doesn't track stock, its pages show
+               no stock wording, and is_in_stock is just WooCommerce's default "in stock"
+               (checked 2026-10-20). Out of stock (set by hand on a few items) stays False.
 
 Run steps, changes and env vars: common/runner.py. Columns: common/schema.py.
 """
@@ -113,12 +116,15 @@ def build_row(product, scraped_at):
     cap = CAPACITY_RE.search(name)
     if cap and any(c.lower() in CAPACITY_CATEGORIES for c in categories):
         capacity = cap.group(1) + cap.group(2)
+    stock_text = woo.clean((product.get("stock_availability") or {}).get("text"))
     row.update(
         part_number=part_number(name),
         brand=brand,
         category=", ".join(categories),
         condition=condition_of(name, names),
         capacity=capacity,
+        available=None if product.get("is_in_stock") and not stock_text else
+        bool(product.get("is_in_stock")),
     )
     return schema.product_row(row)
 

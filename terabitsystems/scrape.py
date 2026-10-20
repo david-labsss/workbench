@@ -14,6 +14,7 @@ variant id, parent_id = product id). Mapping:
                  the same words in the tags, else a leading "New" in the title
   compare_at     only when above the price
   available      the variant's available flag; the store publishes no stock count
+  image_url      the variant's own image, else the product's first; description = body_html as text
 Capacity is read from the title for drives / memory only (upper-case GB/TB).
 
 Run steps, changes and env vars: common/runner.py. Columns: common/schema.py.
@@ -70,6 +71,17 @@ def to_float(v):
         return None
 
 
+def image_of(product, variant):
+    """Absolute URL of the variant's own image, else the product's first image, else None."""
+    images = product.get("images") or []
+    by_id = {img.get("id"): img.get("src") for img in images}
+    src = ((variant.get("featured_image") or {}).get("src") or by_id.get(variant.get("image_id"))
+           or (images[0].get("src") if images else None))
+    if not src:
+        return None
+    return "https:" + src if src.startswith("//") else src
+
+
 def condition_of(title, tags):
     m = re.search(r"\(([^()]*)\)\s*$", title)
     if m and m.group(1).strip().lower() in CONDITIONS:
@@ -119,6 +131,7 @@ def build_rows(product, scraped_at):
                 or CAPACITY_TITLES.search(title)) and not NOT_A_DRIVE_RE.search(title):
         capacity = cap.group(1) + cap.group(2)
     variants = product.get("variants", [])
+    description = schema.plain_text(product.get("body_html"))
     rows = []
     for v in variants:
         price = to_float(v.get("price"))
@@ -140,6 +153,8 @@ def build_rows(product, scraped_at):
             "compare_at_price": compare if compare and price and compare > price else None,
             "available": bool(v.get("available")),
             "stock_qty": None,                 # not published by the store
+            "image_url": image_of(product, v),
+            "description": description,
             "url": f"{BASE}/products/{product['handle']}"
             + (f"?variant={v['id']}" if len(variants) > 1 else ""),
         }))

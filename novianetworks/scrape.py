@@ -10,9 +10,12 @@ crawl-delay applies only to named AI bots). Each page carries the theme's inline
   price.without_tax.value (USD) and the RRP / non-sale price when set (-> compare_at_price);
     "call for price" items have no price there and are saved with an empty price
   stock (the inventory count, only when the store tracks it), instock (-> available)
+    "call for price" items (purchasable false, no stock count) have no Add to Cart and a blank
+    "Current Stock:" on the page, though instock is true: available is saved as None (unknown)
 The rest comes from the page: product id (hidden input product_id), title, brand and condition
-(schema.org microdata), and the category path from the breadcrumbs (e.g. "Wireless > Access
-Points"; the catch-all "Shop All Products" is skipped). The number to check the snapshot
+(schema.org microdata), the category path from the breadcrumbs (e.g. "Wireless > Access
+Points"; the catch-all "Shop All Products" is skipped), image_url (og:image) and description
+(the Description tab as plain text). The number to check the snapshot
 against is the sitemap's product count; a page that fails (after common/http retries) stops
 the run, and a sitemap URL that is gone (404) is skipped.
 
@@ -106,6 +109,12 @@ def parse(url, html, scraped_at):
     sku = clean(attrs.get("sku"))
     mpn = clean(attrs.get("mpn"))
     upc = clean(attrs.get("upc"))
+    stock = num(attrs.get("stock"))
+    available = bool(attrs.get("instock"))
+    if available and attrs.get("purchasable") is False and stock is None:
+        available = None   # call for price: no Add to Cart, no stock shown
+    image = soup.select_one("meta[property='og:image']")
+    description = soup.select_one("#tab-description") or soup.select_one("[itemprop=description]")
     return schema.product_row({
         "scraped_at": scraped_at,
         "website": SITE,
@@ -119,8 +128,10 @@ def parse(url, html, scraped_at):
         "other_specs": f"UPC: {upc}" if upc.lower() not in EMPTY_VALUES else "",
         "price": price,
         "compare_at_price": compare if compare and price and compare > price else None,
-        "available": bool(attrs.get("instock")),
-        "stock_qty": num(attrs.get("stock")),
+        "available": available,
+        "stock_qty": stock,
+        "image_url": (image.get("content") or None) if image else None,
+        "description": schema.plain_text(description.get_text(" ")) if description else None,
         "url": url,
     })
 

@@ -15,6 +15,8 @@ is read one at a time (~1 request/s; robots.txt only blocks /images, /download, 
                 "Limited Quantity" and "Active" -> in stock (both are orderable). The status
                 text is kept in other_specs ("Status: ...").
   condition     blank: Thinkmate sells new parts only
+  image_url     the gallery's main picture (#gallery_image, a /thumb?g=... 200px image)
+  description   the "Specifications" table as "Label: value; ..." (blank on pages without one)
 There is no stock count, compare-at price or SKU separate from the MPN.
 
 NOT covered: the /system/ configurator pages (servers / workstations). Their prices are computed
@@ -27,6 +29,7 @@ Run steps, changes and env vars: common/runner.py. Columns: common/schema.py.
 import json
 import re
 import time
+from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
@@ -44,6 +47,7 @@ NOT_AVAILABLE_RE = re.compile(r"out of stock|discontinued|unavailable|end of lif
                               r"not available|sold out|call for", re.I)
 CAPACITY_RE = re.compile(r"\b(\d+(?:\.\d+)?)\s*(TB|GB)\b")      # upper case only ("8Gb" = speed)
 CAPACITY_CATEGORIES = re.compile(r"drive|ssd|memory|storage", re.I)
+BG_URL_RE = re.compile(r"url\(\s*['\"]?([^'\")]+)")
 
 
 def get(url):
@@ -144,6 +148,17 @@ def parse(url, html, scraped_at):
     cap = CAPACITY_RE.search(title)
     if cap and CAPACITY_CATEGORIES.search(category):
         capacity = cap.group(1) + cap.group(2)
+
+    # The main picture is the gallery link's CSS background: url(/thumb?g=06/14718-0022.png|...)
+    gallery = soup.select_one("#gallery_image")
+    img = BG_URL_RE.search(gallery.get("style") or "") if gallery else None
+    image_url = urljoin(BASE + "/", img.group(1).strip()) if img else None
+    # No prose description on these pages; the specifications table (when there is one) is it
+    specs = []
+    for tr in soup.select("table.table_compare tr.details"):
+        tds = tr.find_all("td")
+        if len(tds) == 2 and clean(tds[0].get_text()) and clean(tds[1].get_text()):
+            specs.append(f"{clean(tds[0].get_text())}: {clean(tds[1].get_text())}")
     return schema.product_row({
         "scraped_at": scraped_at,
         "website": SITE,
@@ -159,6 +174,8 @@ def parse(url, html, scraped_at):
         "price": price,
         "available": available,
         "stock_qty": None,                  # not published
+        "image_url": image_url,
+        "description": schema.plain_text("; ".join(specs)),
         "url": url,
     })
 

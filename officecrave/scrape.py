@@ -22,10 +22,17 @@ Fields: objectID (the store's product id, also the JSON-LD sku) -> product_id an
 (the manufacturer part number, shown as "Model#") -> part_number and model_number; mpn (the
 store's own item code, e.g. NGRGS105NA, shown as "SKU:" on the page) is kept in other_specs;
 manufacturer -> brand; deepest category -> category; price (USD, what the customer pays);
-inStock -> available; quantity (a real stock count in the index) -> stock_qty.
-compare_at_price: old_price when higher than price, else map_price when higher (the page shows
-the MAP price struck through with "Lower Price In Cart"). price is None for login-only items and
-for 0 / negative prices (a few out-of-stock items carry negative placeholder prices).
+inStock -> available; quantity (a real stock count in the index) -> stock_qty; image (a path
+under /image/, as the site's own search script builds it) -> image_url; short_description ->
+description.
+price is what the product page SHOWS (checked in a browser 2026-10-20), not the index's price:
+  - out of stock: the page shows no price at all ("Temporarily Out of Stock / Notify"; the
+    index price is only in hidden JSON-LD) -> price and compare_at_price None.
+  - MAP items (map_price above price): the page has no Add-to-cart, only "Lower Price In Cart",
+    and shows the MAP price as the price -> price = map_price; the hidden cart price is kept in
+    other_specs ("Cart price: ...").
+  - login-only items and 0 / negative prices (placeholders) -> None.
+compare_at_price: old_price when higher than the shown price.
 No condition field (an office supplier selling new stock): left blank. Capacity is read from the
 title for drives and memory (titles are lower-cased, e.g. "18tb", so "6gb/s" speeds are skipped).
 
@@ -62,7 +69,7 @@ CAPACITY_CATEGORIES = {"Computer Memory (RAM)", "Computer Drives", "Network Atta
 
 RETRIEVE = ["objectID", "name", "model", "clean_model", "mpn", "manufacturer", "price",
             "old_price", "map_price", "login_only", "inStock", "quantity", "url",
-            "categories", "hierarchicalCategories"]
+            "categories", "hierarchicalCategories", "image", "short_description"]
 CAPACITY_UPPER_RE = re.compile(r"\b(\d+(?:\.\d+)?)\s*(TB|GB)\b")
 # Titles are lower-cased ("1tb", "16gb"); skip link speeds like "6gb/s" / "12gbps"
 CAPACITY_ANY_RE = re.compile(r"\b(\d+(?:\.\d+)?)\s*(tb|gb)\b(?!\s*/\s*s)", re.I)
@@ -193,16 +200,16 @@ def build_row(hit, scraped_at):
     title = clean(hit.get("name"))
     category = category_of(hit)
     price = to_float(hit.get("price"))
-    if hit.get("login_only") in (1, True, "1", "true") or price is None or price <= 0:
-        price = None   # login-only, $0 or a negative placeholder: no public price
+    available = in_stock(hit.get("inStock"))
+    if hit.get("login_only") in (1, True, "1", "true") or price is None or price <= 0 \
+            or not available:
+        price = None   # login-only, $0 / negative placeholder, or out of stock: no price shown
     old = to_float(hit.get("old_price"))
     map_price = to_float(hit.get("map_price"))
-    compare = None
-    if price:
-        if old and old > price:
-            compare = old
-        elif map_price and map_price > price:
-            compare = map_price   # shown struck through on the page ("Lower Price In Cart")
+    cart_price = None
+    if price and map_price and map_price > price:
+        cart_price, price = price, map_price   # page shows the MAP price ("Lower Price In Cart")
+    compare = old if price and old and old > price else None
     qty = hit.get("quantity")
     stock_qty = int(qty) if isinstance(qty, (int, float)) and not isinstance(qty, bool) \
         and qty >= 0 else None
@@ -211,6 +218,9 @@ def build_row(hit, scraped_at):
     url = clean(hit.get("url"))
     if url and not url.startswith("http"):
         url = f"{BASE}/{url.lstrip('/')}"
+    image = clean(hit.get("image"))
+    if image and not image.startswith("http"):
+        image = f"{BASE}/image/{image.lstrip('/')}"
     return schema.product_row({
         "scraped_at": scraped_at,
         "website": SITE,
@@ -223,12 +233,15 @@ def build_row(hit, scraped_at):
         "category": category,
         "condition": "",
         "capacity": capacity_of(title, category),
-        "other_specs": f"Item code: {item_code}" if item_code else "",
+        "other_specs": "; ".join(s for s in (f"Item code: {item_code}" if item_code else "",
+                                             f"Cart price: {cart_price:.2f}" if cart_price else "") if s),
         "price": price,
         "compare_at_price": compare,
         "discount_pct": round((compare - price) / compare * 100, 1) if compare else None,
-        "available": in_stock(hit.get("inStock")),
+        "available": available,
         "stock_qty": stock_qty,
+        "image_url": image or None,
+        "description": schema.plain_text(hit.get("short_description")),
         "url": url,
     })
 

@@ -20,7 +20,8 @@ check the snapshot against is the sum of the window counts.
 
 Mapping is common/bigcommerce.build_rows (one row per variant: SKU, MPN, brand, deepest
 category, condition, price, retail price, in stock / availabilityV2, stock count when
-tracked). On top of it: a $0 price is saved empty (quote-only), and for drives / memory (by
+tracked, image_url = defaultImage, description as plain text). On top of it: a $0 price is
+saved empty (quote-only), and for drives / memory (by
 category) capacity is read from the title, with price_per_tb for drives only.
 
 Run steps, changes and env vars: common/runner.py. Columns: common/schema.py.
@@ -47,7 +48,8 @@ MEMORY_RE = re.compile(r"\b(memory|ram)\b", re.I)
 CAPACITY_RE = re.compile(r"\b(\d+(?:\.\d+)?)\s?(TB|GB)\b")          # upper-case units only
 
 NODE = """
-        entityId sku mpn name path condition
+        entityId sku mpn name path condition description
+        defaultImage { urlOriginal }
         brand { name }
         categories(first: 10) { edges { node { name path } } }
         prices { price { value } salePrice { value } retailPrice { value } basePrice { value } }

@@ -27,6 +27,8 @@ Mapping (one row per variant; every product has one):
                marks unavailable show "Sold out". Storefront availableForSale agrees.
   brand        vendor; category = product_type
   capacity     drives / memory only, from the title (upper-case GB/TB: "8Gb" is a link speed)
+  image_url    the variant's own image, else the product's first (not the store's placeholder);
+               description = body_html as text (most products have none)
 The product count comes from the store's product sitemaps (all files counted) as a completeness
 check.
 
@@ -178,6 +180,17 @@ def part_number_of(sku, vendor, title):
     return m.group(0) if m else ""
 
 
+def image_of(product, variant):
+    """Absolute URL of the variant's own image, else the product's first image, else None."""
+    images = product.get("images") or []
+    by_id = {img.get("id"): img.get("src") for img in images}
+    src = ((variant.get("featured_image") or {}).get("src") or by_id.get(variant.get("image_id"))
+           or (images[0].get("src") if images else None))
+    if not src or "placeholder" in src.lower():     # c4-placeholder.jpg: the "no image" picture
+        return None
+    return "https:" + src if src.startswith("//") else src
+
+
 def condition_of(card, tags, sku):
     if card and card["badge"]:
         return card["badge"]
@@ -195,6 +208,7 @@ def build_rows(product, card, scraped_at):
     cap = CAPACITY_RE.search(title) if SIZED_RE.search(category) else None
     tags = product.get("tags") or []
     variants = product.get("variants", [])
+    description = schema.plain_text(product.get("body_html"))
     rows = []
     for v in variants:
         sku = (v.get("sku") or "").strip()
@@ -220,6 +234,8 @@ def build_rows(product, card, scraped_at):
             "available": bool(v.get("available")),
             # The card's count is per product; every product here has one variant
             "stock_qty": card["stock_qty"] if card and len(variants) == 1 else None,
+            "image_url": image_of(product, v),
+            "description": description,
             "url": f"{BASE}/products/{product['handle']}"
             + (f"?variant={v['id']}" if len(variants) > 1 else ""),
         }))

@@ -24,6 +24,7 @@ One row per variant: product_id is the variant id, parent_id the product id.
   category          productType (else a "Type_X" tag)
   condition         the store has no condition field; only an explicit word in the title
                     (Refurbished / Recertified / Open Box / Used) is saved
+  image_url         featuredImage; description = descriptionHtml as plain text
 The product count comes from the store's product sitemap (1,000 per file) as a completeness
 check, so a truncated crawl is never saved as the full catalogue.
 
@@ -72,7 +73,7 @@ _token = KNOWN_TOKEN
 
 VARIANT_FIELDS = "id sku title price { amount } compareAtPrice { amount } availableForSale"
 PRODUCT_FIELDS = """
-  id title handle vendor productType tags createdAt
+  id title handle vendor productType tags createdAt featuredImage { url } descriptionHtml
   variants(first: 100) { pageInfo { hasNextPage endCursor } nodes { %s } }
 """ % VARIANT_FIELDS
 LIST_QUERY = """
@@ -280,6 +281,8 @@ def build_rows(n, scraped_at):
     product_id = n["id"].rsplit("/", 1)[-1]
     nodes = n["variants"]["nodes"]
     multi = len(nodes) > 1
+    image_url = (n.get("featuredImage") or {}).get("url") or None
+    description = schema.plain_text(n.get("descriptionHtml"))
     rows = []
     for v in nodes:
         vid = v["id"].rsplit("/", 1)[-1]
@@ -303,6 +306,8 @@ def build_rows(n, scraped_at):
             "compare_at_price": compare if price and compare and compare > price else None,
             "available": bool(v.get("availableForSale")),
             "stock_qty": None,   # not published by the store
+            "image_url": image_url,
+            "description": description,
             "url": f"{BASE}/products/{n.get('handle')}" + (f"?variant={vid}" if multi else ""),
         }))
     return rows

@@ -43,7 +43,12 @@ Mapping, one row per variant (product_id = variant id, parent_id = product id):
                       lists the product
   condition           none published (blank)
   capacity            upper-case GB/TB in the title, for memory and drive products only
-  available           the variant's available flag; no stock count is published
+  available           the variant's available flag; no stock count is published. None for
+                      products tagged "ContactUsBeforebuy": their page shows Add to cart but
+                      also "DO NOT ORDER WITHOUT CONFIRMING STOCK ... limited availability"
+                      (~half of the "available" products, checked 2026-10-20), so stock is unknown
+  image_url           the variant's featured image, else the product's first image
+  description         body_html as plain text
 listed = None: the collections overlap and products_count is not the published count, so there
 is no exact total to check against; a failed page raises instead of ending a collection early.
 
@@ -89,6 +94,7 @@ COLLECTIONS = {
 }
 CAPACITY_RE = re.compile(r"(?<![A-Za-z0-9.])(\d+(?:\.\d+)?)\s*(TB|GB)\b")   # upper case only
 CAPACITY_HINT = re.compile(r"memory|ram\b|dimm|drive|ssd|hdd|storage", re.I)
+UNCONFIRMED_STOCK_TAG = "contactusbeforebuy"   # page: "DO NOT ORDER WITHOUT CONFIRMING STOCK"
 
 
 def to_float(v):
@@ -102,6 +108,12 @@ def build_rows(product, collection_title, scraped_at):
     title = (product.get("title") or "").strip()
     category = (product.get("product_type") or "").strip() or collection_title
     sized = bool(CAPACITY_HINT.search(category) or CAPACITY_HINT.search(collection_title))
+    tags = product.get("tags") or []
+    if isinstance(tags, str):
+        tags = tags.split(",")
+    stock_unconfirmed = any(t.strip().lower() == UNCONFIRMED_STOCK_TAG for t in tags)
+    description = schema.plain_text(product.get("body_html"))
+    product_image = (product.get("images") or [{}])[0].get("src")
     variants = product.get("variants", [])
     rows = []
     for v in variants:
@@ -127,8 +139,11 @@ def build_rows(product, collection_title, scraped_at):
             "capacity": capacity,
             "price": price or None,            # $0 = no real price
             "compare_at_price": compare if compare and price and compare > price else None,
-            "available": bool(v.get("available")),
+            # sold out stays False; "available" but stock-unconfirmed -> unknown
+            "available": (None if stock_unconfirmed else True) if v.get("available") else False,
             "stock_qty": None,                 # not published by the public products.json
+            "image_url": (v.get("featured_image") or {}).get("src") or product_image,
+            "description": description,
             "url": f"{BASE}/products/{product['handle']}"
             + (f"?variant={v['id']}" if len(variants) > 1 else ""),
         }))

@@ -25,6 +25,7 @@ one variant; the CTO configurator option products ("component" tag) have many.
   capacity   drives / memory only: from the title (upper-case GB/TB only: "8Gb" is a link
              speed), else the description's "Storage Capacity" / "Total Capacity"
   interface, form_factor, spindle_speed  from the description's technical details (drives/memory)
+  image_url  featuredImage; description = descriptionHtml as plain text
 The store doesn't publish stock counts (quantityAvailable is access-denied), so stock_qty stays
 blank.
 
@@ -95,7 +96,7 @@ _token = KNOWN_TOKEN
 
 VARIANT_FIELDS = "id sku title price { amount } compareAtPrice { amount } availableForSale"
 PRODUCT_FIELDS = """
-  id title handle vendor productType tags description createdAt
+  id title handle vendor productType tags description createdAt featuredImage { url } descriptionHtml
   variants(first: 100) { pageInfo { hasNextPage endCursor } nodes { %s } }
 """ % VARIANT_FIELDS
 LIST_QUERY = """
@@ -331,6 +332,8 @@ def build_rows(n, scraped_at):
     product_id = n["id"].rsplit("/", 1)[-1]
     nodes = n["variants"]["nodes"]
     multi = len(nodes) > 1
+    image_url = (n.get("featuredImage") or {}).get("url") or None
+    desc_text = schema.plain_text(n.get("descriptionHtml"))
     rows = []
     for v in nodes:
         vid = v["id"].rsplit("/", 1)[-1]
@@ -354,6 +357,8 @@ def build_rows(n, scraped_at):
             "compare_at_price": compare if price and compare and compare > price else None,
             "available": bool(v.get("availableForSale")),
             "stock_qty": None,   # not published by the store
+            "image_url": image_url,
+            "description": desc_text,
             "url": f"{BASE}/products/{n.get('handle')}" + (f"?variant={vid}" if multi else ""),
             **specs,
         }))

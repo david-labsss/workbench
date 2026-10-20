@@ -15,7 +15,8 @@ Each product row gives: product id (/Product/<id>/<slug>, used as product_id), t
 (sku) and an Add to Cart button. The store shows no stock counts. available = True when the row
 has an Add to Cart button and is not flagged "Back Order" or "Preorder" (and the title doesn't
 say "(OUT OF STOCK)"); "Special Order" items stay available. Those flags (plus "On Sale") are
-kept in other_specs.
+kept in other_specs. image_url and description stay blank: the listing rows carry neither (only
+the product pages do, and a per-product fetch is out).
 
 Products are listed in several places (the server tree has "List By brand / chassis / CPU /
 HDD bays" sub-trees). category is the path of the place with the fewest of those "List By"
@@ -356,6 +357,9 @@ def build_row(p, category, scraped_at):
         "price": p["price"] if p["price"] else None,     # no / $0 price = None, never 0
         "available": bool(available),
         "stock_qty": None,                                # not shown by the store
+        # the listing rows (all we fetch) have no image or description; only the product page has
+        "image_url": None,
+        "description": None,
         "url": p["url"],
     })
 
