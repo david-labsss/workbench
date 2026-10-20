@@ -27,8 +27,13 @@ Two sources:
    "Backorder", ... available = the page shows a price and an "Add to cart" button.
    CURRENCY: the .com store shows EUR by default (also to US visitors). Its header offers
    "USD - US Dollar", which posts currency=USD to /directory/currency/switch/ (with the store's
-   form key cookie, as the page's own hyva.postForm does). Each worker does that once, then every
-   page must say USD (hyva.formatPrice currency) and show a $ price, or the run stops.
+   form key cookie, as the page's own hyva.postForm does). Each worker does that at the start,
+   then every page must say USD (hyva.formatPrice currency) and show a $ price. The choice only
+   lasts about an hour (on 2026-10-20 a run's pages turned EUR 60 min in), so a worker that gets
+   a EUR page starts a new session, switches to USD again and reads the page once more; a page
+   still not in USD stops the run.
+   ~11.2k pages, 6 at a time with a 1 s pause each: ~3.8 pages/s, ~50 min (3 at a time measured
+   1.9/s on 2026-10-20).
 
 Which pages are read: every product Hello Retail does NOT list as price-hidden + "Backorder"
 (~11.1k on 2026-10-20: 10,927 priced and in stock, 218 hidden but in stock). The other ~15.4k
@@ -74,7 +79,7 @@ HR_FIELDS = ["title", "productNumber", "url", "hierarchies", "extraData", "inSto
 HR_MAX = 100000
 HR_MIN = 10000                  # fewer products than this from the feed = something is wrong
 SITEMAP = f"{BASE}/google_sitemap_en_index.xml"
-WORKERS = 3                     # requests in flight
+WORKERS = 6                     # requests in flight
 DELAY = 1.0                     # per worker, after each request
 TRIES = 3
 RETRY_PAUSE = 30
@@ -229,9 +234,13 @@ def currency_of(page):
     return m.group(1) if m else None
 
 
-def usd_session():
-    """This worker's session, switched to USD once (the header's "USD - US Dollar" button)."""
+def usd_session(again=False):
+    """This worker's session, switched to USD (the header's "USD - US Dollar" button). again =
+    the USD choice ran out: drop the session's cookies and switch again."""
     s = http.session()
+    if again:
+        s.cookies.clear()
+        _local.usd = False
     if getattr(_local, "usd", False):
         return s
     home = request(s, "GET", f"{BASE}/").text
@@ -331,16 +340,27 @@ def stock(info, price):
     return available, qty
 
 
+def fetch_info(s, p):
+    """(response, page info) of a product page; a page that is gone raises Gone."""
+    r = request(s, "GET", p["url"], allow_gone=True)
+    if r.url.split("#")[0].rstrip("/") != p["url"].rstrip("/") and r.history:
+        raise Gone(f"redirected to {r.url}")
+    info = parse_product(r.text, p["id"])
+    if info["page_id"] and info["page_id"] != p["id"]:
+        raise Gone(f"page is product {info['page_id']}, feed says {p['id']}")
+    return r, info
+
+
 def read_page(p):
     """(feed product, page info + price) or (feed product, None) when the page is gone."""
     s = usd_session()
     try:
-        r = request(s, "GET", p["url"], allow_gone=True)
-        if r.url.split("#")[0].rstrip("/") != p["url"].rstrip("/") and r.history:
-            raise Gone(f"redirected to {r.url}")
-        info = parse_product(r.text, p["id"])
-        if info["page_id"] and info["page_id"] != p["id"]:
-            raise Gone(f"page is product {info['page_id']}, feed says {p['id']}")
+        r, info = fetch_info(s, p)
+        if info["currency"] != "USD":          # the USD choice ran out: switch again, re-read
+            print(f"WARN worker {threading.current_thread().name}: {p['url']} shows "
+                  f"{info['currency']}, switching to USD again", flush=True)
+            s = usd_session(again=True)
+            r, info = fetch_info(s, p)
         if info["currency"] != "USD":
             raise RuntimeError(f"{p['url']}: page currency {info['currency']} (not USD: the switch "
                                f"did not stick, or the page format changed) {snippet(r.text, 300)}")
