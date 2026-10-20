@@ -28,12 +28,15 @@ Two sources:
    CURRENCY: the .com store shows EUR by default (also to US visitors). Its header offers
    "USD - US Dollar", which posts currency=USD to /directory/currency/switch/ (with the store's
    form key cookie, as the page's own hyva.postForm does). Each worker does that at the start,
-   then every page must say USD (hyva.formatPrice currency) and show a $ price. The choice only
-   lasts about an hour (on 2026-10-20 a run's pages turned EUR 60 min in), so a worker that gets
-   a EUR page starts a new session, switches to USD again and reads the page once more; a page
-   still not in USD stops the run.
-   ~11.2k pages, 6 at a time with a 1 s pause each: ~3.8 pages/s, ~50 min (3 at a time measured
-   1.9/s on 2026-10-20).
+   then every page must say USD (hyva.formatPrice currency) and show a $ price.
+   PAGE LIMIT: after ~6,700 product pages from one machine the store serves its default EUR pages
+   to that machine, even to a fresh USD session (2026-10-20: two runs, at 1.9 and 4.0 pages/s,
+   both turned EUR at the same page, #6,678 of 11,155; a fresh runner then read later products in
+   USD). So pages are read slowly: 3 at a time with a 1.5 s pause each, ~1.45 pages/s (~5.2k an
+   hour, all ~11.2k in ~2 h 10 min). A worker that gets a EUR page switches to USD again (new
+   session) and re-reads it; while pages stay EUR it pauses LIMIT_PAUSE and tries again, up to
+   LIMIT_TRIES times, then the run stops (nothing saved). The limit is not worked around with
+   more machines / addresses.
 
 Which pages are read: every product Hello Retail does NOT list as price-hidden + "Backorder"
 (~11.1k on 2026-10-20: 10,927 priced and in stock, 218 hidden but in stock). The other ~15.4k
@@ -79,8 +82,10 @@ HR_FIELDS = ["title", "productNumber", "url", "hierarchies", "extraData", "inSto
 HR_MAX = 100000
 HR_MIN = 10000                  # fewer products than this from the feed = something is wrong
 SITEMAP = f"{BASE}/google_sitemap_en_index.xml"
-WORKERS = 6                     # requests in flight
-DELAY = 1.0                     # per worker, after each request
+WORKERS = 3                     # requests in flight
+DELAY = 1.5                     # per worker, after each request (~1.45 pages/s, see PAGE LIMIT)
+LIMIT_PAUSE = 900               # seconds to wait when the store serves EUR pages anyway
+LIMIT_TRIES = 3
 TRIES = 3
 RETRY_PAUSE = 30
 VERIFY_HIDDEN = 40              # hidden / backorder products whose pages are read as a check
@@ -359,6 +364,15 @@ def read_page(p):
         if info["currency"] != "USD":          # the USD choice ran out: switch again, re-read
             print(f"WARN worker {threading.current_thread().name}: {p['url']} shows "
                   f"{info['currency']}, switching to USD again", flush=True)
+            s = usd_session(again=True)
+            r, info = fetch_info(s, p)
+        for attempt in range(1, LIMIT_TRIES + 1):
+            if info["currency"] == "USD":
+                break
+            print(f"WARN worker {threading.current_thread().name}: still {info['currency']} after "
+                  f"switching (the store's page limit?): pausing {LIMIT_PAUSE}s, try {attempt} of "
+                  f"{LIMIT_TRIES}", flush=True)
+            time.sleep(LIMIT_PAUSE)
             s = usd_session(again=True)
             r, info = fetch_info(s, p)
         if info["currency"] != "USD":
