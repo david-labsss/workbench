@@ -223,7 +223,7 @@ def build_rows(product, stock_by_variant, scraped_at, prev_by_id):
     tb = capacity_tb(mapped.get("capacity"), product.get("title"))
     rows = []
     for v in variants:
-        price = to_float(v.get("price"))
+        price = to_float(v.get("price")) or None
         if not v.get("available"):
             stock = 0
         elif stock_by_variant is not None:

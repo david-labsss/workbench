@@ -242,7 +242,7 @@ def build_rows(n, scraped_at):
         vid = v["id"].rsplit("/", 1)[-1]
         sku = (v.get("sku") or "").strip()
         vtitle = v.get("title")
-        price = money(v.get("price"))
+        price = money(v.get("price")) or None
         compare = money(v.get("compareAtPrice"))
         rows.append(schema.product_row({
             "scraped_at": scraped_at,

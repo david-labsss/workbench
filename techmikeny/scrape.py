@@ -144,7 +144,7 @@ def build_rows(n, scraped_at):
         vtitle = title if option in ("", "Default Title") else f"{title} - {option}"
         first_word = title.split(" ", 1)[0] if title else ""
         cap = CAPACITY_RE.search(vtitle)
-        price = money(v.get("price"))
+        price = money(v.get("price")) or None
         compare = money(v.get("compareAtPrice"))
         rows.append(schema.product_row({
             "scraped_at": scraped_at,

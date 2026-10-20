@@ -116,7 +116,7 @@ def build_rows(product, scraped_at):
             "category": product.get("product_type") or "",
             "condition": condition,
             "capacity": (cap.group(1) + cap.group(2)) if cap else "",
-            "price": to_float(v.get("price")),
+            "price": to_float(v.get("price")) or None,
             "compare_at_price": compare if compare else "",  # the store sends 0.00 for "none"
             "available": bool(v.get("available")),
             "stock_qty": None,   # not published by the store

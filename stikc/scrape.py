@@ -84,7 +84,7 @@ def build_rows(product, scraped_at):
     capacity = (cap.group(1) + cap.group(2).upper()) if cap else ""
     rows = []
     for v in variants:
-        price = to_float(v.get("price"))
+        price = to_float(v.get("price")) or None
         compare = to_float(v.get("compare_at_price"))
         vtitle = v.get("title")
         sku = v.get("sku") or ""

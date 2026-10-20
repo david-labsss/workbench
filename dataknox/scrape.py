@@ -54,7 +54,7 @@ def build_rows(product, scraped_at):
             "title": title + ("" if v.get("title") in (None, "Default Title") else f" - {v['title']}"),
             "brand": product.get("vendor", ""),
             "category": product.get("product_type", ""),
-            "price": to_float(v.get("price")),
+            "price": to_float(v.get("price")) or None,
             "compare_at_price": to_float(v.get("compare_at_price")),
             "available": bool(v.get("available")),
             "stock_qty": None,  # not published by the public /products.json endpoint

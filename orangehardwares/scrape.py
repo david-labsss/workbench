@@ -216,7 +216,7 @@ def map_item(n, scraped_at):
     sku = (v.get("sku") or "").strip()
     first_word = title.split(" ", 1)[0] if title else ""
     cap = CAPACITY_RE.search(title)
-    price = money(v.get("price"))
+    price = money(v.get("price")) or None
     compare = money(v.get("compareAtPrice"))
     available = v.get("availableForSale", n.get("availableForSale"))
     row = {

@@ -90,7 +90,7 @@ def build_rows(product, scraped_at):
     variants = product.get("variants", [])
     rows = []
     for v in variants:
-        price = to_float(v.get("price"))
+        price = to_float(v.get("price")) or None
         tb = capacity_tb(specs.get("capacity") or title)
         rows.append(schema.product_row({
             "scraped_at": scraped_at,
