@@ -7,6 +7,11 @@ via common/woocommerce.py. The store keeps the rest in each product's own attrib
 -> brand when the brands taxonomy is empty, "SKU" (the manufacturer part number, same as the
 product SKU) -> sku / part_number; any other attribute (e.g. GTIN) goes to other_specs.
 
+The store hides out-of-stock items from its catalog, and the Store API does the same unless
+stock_status is asked for: on 2026-10-20 the plain list had 1,474 products, the out-of-stock
+filter 680 more (their pages are public and show the price + "Out of stock"). So every stock
+status is asked for (2,154), and those products are saved as available = False.
+
 Run steps, changes and env vars: common/runner.py. Columns: common/schema.py.
 """
 from common import runner, schema, woocommerce as woo
@@ -15,6 +20,7 @@ SITE = "dziner"
 BASE = "https://www.d-ziner.com"
 MAPPED_ATTRS = {"sku", "condition", "brand"}
 EMPTY_VALUES = {"not available", "n/a", "na", "none", "-"}
+STOCK_STATUSES = {"stock_status[]": ["instock", "outofstock", "onbackorder"]}
 
 
 def attributes(product):
@@ -42,7 +48,7 @@ def build_row(product, scraped_at):
 
 
 def scrape(limit, scraped_at):
-    products, listed = woo.fetch_products(BASE, limit)
+    products, listed = woo.fetch_products(BASE, limit, params=STOCK_STATUSES)
     others = sum(1 for p in products if p.get("type") != "simple")
     if others:
         print(f"note: {others} products are not 'simple' (variable/grouped): one row each, "
