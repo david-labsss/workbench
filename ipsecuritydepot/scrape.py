@@ -51,6 +51,8 @@ Run steps, changes and env vars: common/runner.py. Columns: common/schema.py.
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import requests
+
 from common import bigcommerce, http, runner, schema
 
 SITE = "ipsecuritydepot"
@@ -60,6 +62,8 @@ CAP = 10000            # searchProducts never returns more results than this
 PAGE = 50
 WORKERS = 3
 DELAY = 0.4            # between pages of one search
+TRIES = 3              # attempts per GraphQL request when the response is cut off or times out
+RETRY_PAUSE = 20
 PRICE_BOUNDS = [0, 50, 100, 200, 500, 1000, 2000, 5000]   # first split of a capped category
 DROP_FIELDS = {"overview"}                 # long marketing text
 RENAME_FIELDS = {"product type": "Product"}   # keep in other_specs, not the category column
@@ -84,11 +88,23 @@ class Api:
                         "Content-Type": "application/json"}
 
     def query(self, query, variables=None):
-        """A failed request or GraphQL error raises: it must never look like an empty page."""
-        r = http.session().post(BASE + "/graphql", headers=self.headers, timeout=90,
-                                json={"query": query, "variables": variables or {}})
-        r.raise_for_status()
-        data = r.json()
+        """A failed request or GraphQL error raises: it must never look like an empty page.
+        A response the server cuts off part-way is tried again a few times first (requests does
+        not retry those; one ended a run early on 2026-10-20)."""
+        for attempt in range(1, TRIES + 1):
+            try:
+                r = http.session().post(BASE + "/graphql", headers=self.headers, timeout=90,
+                                        json={"query": query, "variables": variables or {}})
+                r.raise_for_status()
+                data = r.json()
+                break
+            except (requests.ConnectionError, requests.Timeout,
+                    requests.exceptions.ChunkedEncodingError) as e:
+                if attempt == TRIES:
+                    raise
+                print(f"WARN GraphQL request: {e.__class__.__name__}, retrying in {RETRY_PAUSE}s",
+                      flush=True)
+                time.sleep(RETRY_PAUSE)
         if data.get("errors"):
             raise RuntimeError(f"GraphQL error: {data['errors'][0].get('message')}")
         return data["data"]
