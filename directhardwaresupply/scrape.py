@@ -245,7 +245,10 @@ def usd_session():
             raise RuntimeError(f"{BASE}/: shows {cur} and has no 'USD - US Dollar' switch")
         form = json.loads(m.group(1))
         data = dict(form["data"], form_key=form_key(s))
-        request(s, "POST", form["action"], data=data,
+        # Don't follow the switch's redirect: it goes back to the "uenc" page baked into the
+        # cached home page, which can be a dead URL (404 seen 2026-10-20). The cookie it sets is
+        # what counts, and the home page is re-read below to confirm USD.
+        request(s, "POST", form["action"], data=data, allow_redirects=False,
                 headers={"Origin": BASE, "Referer": f"{BASE}/"})
         home = request(s, "GET", f"{BASE}/").text
         cur = currency_of(home)
