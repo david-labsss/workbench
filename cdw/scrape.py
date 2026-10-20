@@ -5,8 +5,14 @@ Data path: the public category listing pages, plain HTML:
   /category/<path>/?w=<code>&maxrecords=72&pcurrent=<n>          (b=<brand code> to filter)
 robots.txt (User-agent: *) disallows /search/, the account / cart pages and a list of query
 parameters (SortBy=, page=, pfm=, ...). None of the parameters used here is on that list, so the
-"Sort by" parameter is left out: the default order ("Best Match") was checked to page stably
-(2026-10-20: transceivers / ProLine, 686 of 686 unique over 10 pages; server memory 357 of 357).
+"Sort by" parameter is left out. The default order ("Best Match") shifts over time, so a walk
+of a category's pages can repeat some products and never show others: on 2026-10-20 two walks of
+Server Memory found 305 and 290 of its 357 products (together all 357), and a full run came up
+short in 19 of 33 categories. Reading the same pages again right away can return the same order
+(Wireless Access Points: 452 of 579 twice), while reading the category brand by brand (b=, other
+listings, most of them one page) found all of them. So a category that comes up short is read
+again brand by brand, then any brand listing still short is read again, up to REREADS rounds,
+REREAD_PAUSE apart.
 Product URLs are saved without the tile link's "?pfm=srh" (also disallowed).
 72 is the biggest page size the site accepts (100 falls back to 24). The sitemaps are behind a
 bot check (HTTP 429) and the stock / price GraphQL on dc-origin.cdw.com is the site's private
@@ -120,6 +126,8 @@ DELAY = 1.0                    # per worker, after each request
 TRIES = 3                      # attempts per request for stalled / cut-off downloads
 RETRY_PAUSE = 30
 CHURN_SLACK = 10               # products a category may come up short when some vanish mid-run
+REREADS = 4                    # extra rounds for a category that comes up short (shifting order)
+REREAD_PAUSE = 60              # seconds between those rounds, for the order to change
 RANGE_RE = re.compile(r'search-pagination-range[^>]*>\s*<strong>([\d,]+) - ([\d,]+)</strong>'
                       r'\s*of\s*([\d,]+)')
 TILE_SPLIT = '<div class="search-result coupon-check"'
@@ -275,15 +283,18 @@ def walk(pool, cats, limit):
     """{CDW#: tile} from every listing, plus the categories' own totals and the brand names."""
     firsts = list(pool.map(lambda c: fetch_page((c, ()), 1), cats))
     pages, totals, brand_names = {}, {}, {}      # pages: {listing: {page: (tiles, total)}}
+    brands, expected = {}, {}                    # expected: {listing: products it should show}
     jobs = []
     for cat, (tiles, total, facets) in zip(cats, firsts):
         totals[cat[0]] = total
+        brands[cat[0]] = facets.get("b") or []
         pages[(cat, ())] = {1: (tiles, total)}   # kept even when the category is split by brand
         for value, label, _ in facets.get("b") or []:
             brand_names[value] = label
         listings = plan(cat, total, facets)
         print(f"{cat[0]} {cat[2]}: {total} products in {len(listings)} listing(s)", flush=True)
         for listing, n in listings:
+            expected[listing] = n
             jobs += [(listing, p) for p in range(1, math.ceil(n / PAGE_SIZE) + 1)
                      if p not in pages.get(listing, {})]
     rounds = 0
@@ -305,12 +316,43 @@ def walk(pool, cats, limit):
         if rounds == 2:
             jobs = []
 
-    by_code, found_in = {}, {}
+    by_code, found_in, shown = {}, {}, {}        # shown: {listing: CDW#s it showed}
+
+    def keep(listing, tiles):
+        for t in tiles:
+            found_in.setdefault(listing[0][0], set()).add(t["code"])
+            shown.setdefault(listing, set()).add(t["code"])
+            by_code.setdefault(t["code"], t)
+
     for listing, got in pages.items():
         for tiles, _ in got.values():
-            for t in tiles:
-                found_in.setdefault(listing[0][0], set()).add(t["code"])
-                by_code.setdefault(t["code"], t)
+            keep(listing, tiles)
+    # The default order shifts: a short category is read again brand by brand, then its brand
+    # listings that are still short are read again
+    for reread in range(1, REREADS + 1):
+        short = [] if limit else [c for c in cats if len(found_in.get(c[0], ())) < totals[c[0]]]
+        if not short:
+            break
+        if reread > 1:
+            time.sleep(REREAD_PAUSE)
+        redo = []
+        for c in short:
+            if (c, ()) in expected and not any(l[0] == c and l[1] for l in expected):
+                for value, _, n in brands[c[0]]:
+                    expected[(c, (("b", value),))] = n
+            redo += [(l, n) for l, n in expected.items()
+                     if l[0] == c and l[1] and len(shown.get(l, ())) < n]
+            if (c, ()) in expected and not brands[c[0]]:
+                redo.append(((c, ()), expected[(c, ())]))   # no brand facet: same pages again
+        jobs = [(l, p) for l, n in redo for p in range(1, math.ceil(n / PAGE_SIZE) + 1)]
+        before = {c[0]: len(found_in.get(c[0], ())) for c in short}
+        print(f"re-read {reread}: {len(short)} short categories, {len(redo)} listings, "
+              f"{len(jobs)} pages", flush=True)
+        for (listing, _), (tiles, _, _) in zip(jobs, pool.map(lambda j: fetch_page(*j), jobs)):
+            keep(listing, tiles)
+        for c in short:
+            print(f"  {c[0]} {c[2]}: {before[c[0]]} -> {len(found_in.get(c[0], ()))} of "
+                  f"{totals[c[0]]}", flush=True)
     for cat in cats:
         found, total = len(found_in.get(cat[0], ())), totals[cat[0]]
         if limit:
