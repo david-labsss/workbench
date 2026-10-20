@@ -16,15 +16,18 @@ price, originalPrice, inStock and quoteOnly. So we read price AND stock straight
 listing and never fetch the (108 KB, ~5 s) product pages, nor touch /api/. Currency is USD
 (the product pages' JSON-LD says priceCurrency USD).
 
-Per-category pagination is deterministic (the same page always returns the same products), so we
-page every category 1..totalPages and dedupe globally by product id. Two quirks we handle:
-  - the listing's "total" is NOT reliable - it is inflated, badly so for tiny categories
-    (e.g. power-conditioning claims 227 but only 143 distinct products are reachable), and big
-    categories page cleanly to ~95%+ of their total. The reachable distinct set IS the catalogue
-    the site exposes, so we take it as complete and return listed=None (no reliable total). As a
-    safety net we fail the run if too many pages stay empty after retries.
+Order: every listing is read with sort=price-asc. The default "relevant" order is NOT stable
+between pages (the same products repeat on several pages and others never show): walking
+power-conditioning in the default order reached only 143 of its 227 products, the same walk
+with sort=price-asc 223 (2026-10-20). Priced products never repeat in price order; the few
+repeats are quote-only items, which share one (hidden) price, and re-walking those in both price
+directions finds no more, so the last ~2% of a "total" are products no listing page shows. We
+page every category 1..totalPages, dedupe globally by product id, and return listed=None (the
+total slightly over-counts), but each run prints every category's coverage against its total
+and stops if the price order isn't applied or a sizeable category falls below MIN_COVERAGE,
+the sign the paging broke again. Also:
   - a page occasionally returns 200 with an empty listing (a transient server hiccup), so an
-    empty page is retried before being accepted.
+    empty page is retried before being accepted, and the run fails if too many stay empty.
 
 Scoping: CATEGORIES is the fixed set of IT/server/storage/networking category slugs (servers,
 storage, components/RAM, networking and their accessories). Override it with the CATEGORIES env
@@ -66,6 +69,9 @@ PER_PAGE = 12                 # the listing is fixed at 12 products a page (no p
 WORKERS = int(os.getenv("SCRAPE_WORKERS") or 8)
 EMPTY_RETRIES = 3             # a 200-with-no-products page is a transient hiccup: retry it
 MAX_EMPTY_SHARE = 0.02        # fail the run if more than this share of pages stay empty
+SORT = "price-asc"            # the only stable order (the default "relevant" one skips products)
+MIN_COVERAGE = 0.85           # stop if a category of 100+ products reaches less of its total
+WARN_COVERAGE = 0.97          # ... and print a warning below this
 
 # The IT / server / storage / networking section: servers, storage (HDD/SSD), components (RAM,
 # CPUs, GPUs, boards), networking and their accessories. Everything else the store sells
@@ -172,9 +178,17 @@ def total_pages(html):
     return int(m.group(1)) if m else None
 
 
+def listing_info(html):
+    """(total, sort) the listing page reports, e.g. (18740, "price-asc")."""
+    rsc = decode_rsc(html)
+    total = re.search(r'"total":\s*(\d+)', rsc)
+    sort = re.search(r'"sort":"([^"]*)"', rsc)
+    return (int(total.group(1)) if total else None), (sort.group(1) if sort else None)
+
+
 def page_url(slug, page):
-    base = f"{BASE}/category/{slug}"
-    return base if page == 1 else f"{base}?page={page}"
+    url = f"{BASE}/category/{slug}?sort={SORT}"
+    return url if page == 1 else f"{url}&page={page}"
 
 
 def to_price(value):
@@ -222,18 +236,39 @@ def build_row(p, slug, scraped_at):
 
 
 def plan_tasks(slugs):
-    """One (slug, page) task per listing page of every scoped category."""
+    """One (slug, page) task per listing page of every scoped category, plus each category's
+    reported total. Stops if a listing ignores the price order (the default order skips products)."""
     with ThreadPoolExecutor(WORKERS) as pool:
         firsts = list(pool.map(lambda s: (s, fetch(page_url(s, 1))), slugs))
-    tasks = []
+    tasks, totals = [], {}
     for slug, html in firsts:
         tp = total_pages(html)
         if not tp:
             print(f"WARN category {slug}: no listing found (skipped)", flush=True)
             continue
-        print(f"category {slug}: {tp} pages", flush=True)
+        total, sort = listing_info(html)
+        if sort != SORT:
+            sys.exit(f"category {slug}: the listing is in {sort!r} order, not {SORT!r}; the "
+                     "default order skips products, so not trusting this run")
+        totals[slug] = total
+        print(f"category {slug}: {total} products, {tp} pages", flush=True)
         tasks += [(slug, page) for page in range(1, tp + 1)]
-    return tasks
+    return tasks, totals
+
+
+def check_coverage(seen, totals):
+    """Print each category's distinct products against its reported total; stop on a big gap."""
+    low = []
+    for slug, total in totals.items():
+        got = len(seen.get(slug, ()))
+        share = got / total if total else 1
+        flag = "WARN " if share < WARN_COVERAGE else ""
+        print(f"{flag}category {slug}: {got} of {total} products ({share:.1%})", flush=True)
+        if total and total >= 100 and share < MIN_COVERAGE:
+            low.append(f"{slug} {got}/{total}")
+    if low:
+        sys.exit(f"categories far below their totals ({', '.join(low)}): the listing paging "
+                 "broke; not trusting this run")
 
 
 def shard(tasks):
@@ -266,7 +301,8 @@ def scrape(limit, scraped_at):
         items = list(by_id.values())[:limit]
         return [build_row(p, slug, scraped_at) for p, slug in items], None
 
-    tasks = shard(plan_tasks(slugs))
+    tasks, totals = plan_tasks(slugs)
+    tasks = shard(tasks)
     if not tasks:
         return [], None
 
@@ -275,21 +311,41 @@ def scrape(limit, scraped_at):
         products = parse_products(fetch(page_url(slug, page)))
         return slug, products
 
+    seen = {}                                   # slug -> distinct product ids seen in it
+
+    def keep(slug, products):
+        for p in products:
+            pid = str(p["id"])
+            seen.setdefault(slug, set()).add(pid)
+            if pid not in by_id:                # keep the first category a product is seen in
+                by_id[pid] = (p, slug)
+
+    empty_tasks = []
     with ThreadPoolExecutor(WORKERS) as pool:
-        for i, (slug, products) in enumerate(pool.map(do, tasks), 1):
+        for i, (task, (slug, products)) in enumerate(zip(tasks, pool.map(do, tasks)), 1):
             if not products:
-                empty[0] += 1
-            for p in products:
-                pid = str(p["id"])
-                if pid not in by_id:            # keep the first category a product is seen in
-                    by_id[pid] = (p, slug)
+                empty_tasks.append(task)
+            keep(slug, products)
             if i % 500 == 0 or i == len(tasks):
                 print(f"{i}/{len(tasks)} pages, {len(by_id)} unique products, "
-                      f"{empty[0]} empty", flush=True)
+                      f"{len(empty_tasks)} empty", flush=True)
+    # Pages that stayed empty under load usually answer when asked again, one at a time
+    for task in empty_tasks:
+        time.sleep(5)
+        slug, products = do(task)
+        if products:
+            keep(slug, products)
+        else:
+            empty[0] += 1
+    if empty_tasks:
+        print(f"re-read {len(empty_tasks)} empty pages one at a time: {empty[0]} still empty",
+              flush=True)
 
     if empty[0] > MAX_EMPTY_SHARE * len(tasks):
         sys.exit(f"{empty[0]}/{len(tasks)} listing pages were empty after retries; "
                  "the site is likely erroring - not trusting this run")
+    if int(os.getenv("SHARD_COUNT") or 1) == 1:  # a shard only covers part of each category
+        check_coverage(seen, totals)
 
     rows = [build_row(p, slug, scraped_at) for p, slug in by_id.values()]
     return rows, None            # the site's "total" is unreliable, so no completeness target
