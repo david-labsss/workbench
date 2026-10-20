@@ -79,16 +79,26 @@ def fetch_products(base, limit=0, per_page=PAGE, delay=PAGE_DELAY, params=None):
     page raises (common/http retries 429/5xx first): it must never look like the end."""
     products, listed, page = [], None, 1
     while True:
-        r = http.session().get(base + STORE_PRODUCTS,
-                               params={"per_page": per_page, "page": page, **(params or {})},
-                               timeout=60)
-        r.raise_for_status()
-        if listed is None:
+        # Fetch this page, retrying a non-JSON 200 (an intermittent HTML/empty error or a CDN
+        # interstitial): .json() would otherwise raise and look like the end of the catalogue.
+        batch = None
+        for attempt in range(6):
+            r = http.session().get(base + STORE_PRODUCTS,
+                                   params={"per_page": per_page, "page": page, **(params or {})},
+                                   timeout=60)
+            r.raise_for_status()
+            if listed is None:
+                try:
+                    listed = int(r.headers.get("X-WP-Total"))
+                except (TypeError, ValueError):
+                    listed = None
             try:
-                listed = int(r.headers.get("X-WP-Total"))
-            except (TypeError, ValueError):
-                listed = None
-        batch = r.json()
+                batch = r.json()
+                break
+            except ValueError:  # includes requests' JSONDecodeError
+                if attempt == 5:
+                    raise
+                time.sleep(3 * (attempt + 1))
         if not batch:
             break
         products.extend(batch)
