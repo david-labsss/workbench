@@ -253,6 +253,8 @@ def map_item(it, scraped_at):
         "available": "Yes" if (isinstance(qty, int) and qty > 0) else "No",
         "stock_qty": "",
         "other_specs": other,
+        "image_url": it.get("image_link") or None,
+        "description": schema.plain_text(it.get("description")),
         "url": url,
     }
     return schema.product_row(row)
