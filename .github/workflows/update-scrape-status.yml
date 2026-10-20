@@ -1,0 +1,35 @@
+name: Update Scrape Status
+
+# Writes the competitor-discovery sheet's "Scrape status" column (R) once a day.
+# This file is published to every account's workbench repo, but the job is guarded to run ONLY in
+# Aaron-labbss/workbench, so it runs once a day (the other repos' scheduled runs skip immediately).
+# Needs one repo secret in Aaron-labbss/workbench: GOOGLE_SA_JSON (the Google service-account key).
+on:
+  schedule:
+    - cron: "0 4 * * *"   # daily 04:00 UTC (~09:00 PKT), after the morning scrapes
+  workflow_dispatch: {}
+
+concurrency:
+  group: update-scrape-status
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: github.repository == 'Aaron-labbss/workbench'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Update the Scrape status column
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+        run: python -I ops/update_scrape_status.py
