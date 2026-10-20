@@ -19,6 +19,7 @@ RRP / non-sale price (saved as compare_at_price when higher), the buy button and
 "Availability" text:
   "Add to Cart" / "Choose Options" / "Buy Now" (and no "out of stock" text)   in stock
   anything else / none                                                        out of stock
+image_url = the column's image (BigCommerce CDN); description = its "Description" row, plain text.
 On 2026-10-19 every product sampled had "Add to Cart" with "In Stock" (the comparison page leaves
 out products the store hides). Titles start with the part number ("Part No: 39Y9278 - IBM ...",
 "00AD010 - IBM 1TB ..."), which the product page repeats as "Part Number #", so part_number is
@@ -118,11 +119,13 @@ def parse_compare(html):
     if not cards:
         return []
     actions = rows[1].select("td.compareTable-action") if len(rows) > 1 else []
-    availability = []
+    availability, descriptions = [], []
     for row in rows:
         head = row.select_one("th.compareTable-heading")
         if head and clean(head.get_text()).lower() == "availability":
             availability = [clean(td.get_text(" ")) for td in row.select("td")]
+        if head and clean(head.get_text()).lower() == "description":
+            descriptions = [schema.plain_text(td.decode_contents()) for td in row.select("td")]
 
     def link_ids(card):
         a = card.select_one("a.compareTable-removeProduct")
@@ -149,6 +152,14 @@ def parse_compare(html):
                         "data-product-non-sale-price-without-tax")
         button = clean(actions[i].get_text(" ")).lower() if i < len(actions) else ""
         stock_text = availability[i] if i < len(availability) else ""
+        img = card.select_one("img.card-image") or card.find("img")
+        image = clean(img.get("src") or img.get("data-src")) if img else ""
+        if image.startswith("//"):
+            image = "https:" + image
+        elif image.startswith("/"):
+            image = BASE + image
+        if "productdefault" in image.lower() or image.startswith("data:"):
+            image = ""                          # the store's "no image" placeholder, not a photo
         products.append({
             "id": pid,
             "title": clean(link.get_text()),
@@ -157,6 +168,8 @@ def parse_compare(html):
             "price": price or None,                     # $0 = no real price
             "compare": compare if compare and price and compare > price else None,
             "available": button in IN_STOCK_BUTTONS and not OUT_OF_STOCK_RE.search(stock_text),
+            "image": image or None,
+            "description": descriptions[i] if i < len(descriptions) else None,
         })
     return products
 
@@ -214,6 +227,8 @@ def build_row(p, scraped_at):
         "price_per_tb": round(p["price"] / tb, 2) if p["price"] and tb else None,
         "available": p["available"],
         "stock_qty": None,                 # not shown on the comparison page
+        "image_url": p["image"],
+        "description": p["description"],
         "url": p["url"],
     })
 

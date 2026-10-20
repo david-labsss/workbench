@@ -31,6 +31,7 @@ Per <item> (Google Merchant fields, namespace g:):
                    else g:price; None when missing or 0 (never 0)
   available        g:availability == in_stock
   stock_qty        blank: the feed (and every product page) only says "In Stock", no counts
+  image_url, description  g:image_link (absolute), g:description (as plain text)
   specs            g:product_detail attribute name / value pairs: Interface, Form Factor,
                    Rotational Speed, Cache, Endurance go to their columns, the rest (Data Rate,
                    Speed, Memory Type, ...) to other_specs ("Name: value; ..."). The feed's
@@ -179,6 +180,8 @@ def build_row(item, scraped_at):
         "discount_pct": round((compare - price) / compare * 100, 1) if compare else None,
         "available": text(item, "availability").lower() == "in_stock",
         "stock_qty": None,                  # no counts anywhere on the site
+        "image_url": text(item, "image_link") or None,
+        "description": schema.plain_text(text(item, "description")),
         "url": text(item, "link"),
     })
 

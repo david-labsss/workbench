@@ -30,6 +30,7 @@ Fields (the store's own product model in its JS maps them the same way):
                                         that are out of stock, so it is only a fallback.
   sabrepc_inventory                  -> stock_qty (a real count; 0 = none)
   url (/<part>-<brand>-S<id>)        -> url (absolute)
+  imageUrl / highlights              -> image_url (absolute), description (store's bullet list)
 price is None when don_t_show_sabrepc_price = "Yes" (the page hides the price: "Contact sales for
 pricing"; ~950 products, sabrepc_price is then missing) and when sabrepc_price is 0 (the page
 shows the same "Contact sales for pricing"). show_price_in_cart = "Yes" would mean "See price in
@@ -281,6 +282,11 @@ def build_row(r, scraped_at):
         capacity = text(r.get("memory_size")).replace(" ", "")
     tb = specs.get("tb")
     url = text(r.get("url")) or "/" + text(r.get("sabrepc_url_component"))
+    image = text(r.get("imageUrl")) or text(r.get("thumbnailImageUrl"))   # "//...cloudfront.net"
+    if image.startswith("//"):
+        image = "https:" + image
+    elif image.startswith("/"):
+        image = BASE + image
     return schema.product_row({
         "scraped_at": scraped_at,
         "website": SITE,
@@ -302,6 +308,10 @@ def build_row(r, scraped_at):
         "price_per_tb": round(price / tb, 2) if price and tb else None,
         "available": available,
         "stock_qty": qty,
+        "image_url": image or None,
+        # Searchspring has no long description; "highlights" is the store's bullet list
+        # (HTML-escaped "&lt;ul&gt;&lt;li&gt;...", so text() unescapes it before plain_text)
+        "description": schema.plain_text(text(r.get("highlights"))),
         "url": url if url.startswith("http") else BASE + url,
     })
 

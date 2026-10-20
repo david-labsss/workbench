@@ -34,7 +34,7 @@ Query shape: the body the site's own code sends from a category page, with a big
                   {"terms": {"BrandName.keyword": [featured brands], "boost": 15}}]}},
    "from": 0 / 1000 / ... / 9000, "size": 1000,
    "sort": [{"BrandName.keyword": "asc"}, {"identifier.keyword": "asc"}],  # "Sort by Brand"
-   "_source": [the 13 fields used below]}
+   "_source": [the 15 fields used below]}
 * The server does not filter on the RetailRate field itself: it applies the range to the price
   the site shows (PCNationRate, or RetailRate when that is 0), the same price as its own
   "RetailRate_brackets" facet script (checked 2026-10-20: "<= 65" returned PCNationRate up to
@@ -66,6 +66,8 @@ Stock" and JSON-LD availability follow StockStatus alone (checked 2026-10-20: St
 with Quantity 18 shows "Out of Stock", true with Quantity 0 shows "In Stock"); Quantity -> stock_qty
 (the store's unit count, not shown to shoppers; left empty when it says 0 for a product shown in
 stock); url = https://www.pcnation.com/<pcn_url_key> (the product page's canonical URL).
+base_image -> image_url (media.pcnation.net, 800 px); product_highlights -> description (the full
+"description", a ~3.7 KB spec-table HTML per product, would make every page ~7x bigger).
 listed = the sum of the four categories' exact counts.
 
 Run steps, changes and env vars: common/runner.py. Columns: common/schema.py.
@@ -94,7 +96,11 @@ DELAY = 0.5                   # before each request, to stay polite
 TRIES = 3                     # attempts per request for stalled / cut-off downloads
 RETRY_PAUSE = 30
 SOURCE = ["identifier", "mpn", "BrandName", "name", "PCNationRate", "RetailRate", "Quantity",
-          "StockStatus", "Condition", "pcn_url_key", "category_text", "categories", "updated"]
+          "StockStatus", "Condition", "pcn_url_key", "category_text", "categories", "updated",
+          "base_image", "product_highlights"]
+# The product page's own image URL: the store's image CDN resizing base_image to 800 px wide
+IMAGE_BASE = "https://media.pcnation.net/cdn-cgi/image/width=800,format=auto/"
+FLIGHT_REF_RE = re.compile(r"\$[0-9a-f]+")   # a string moved to its own RSC row (>= 1 KB long)
 FEATURED = ["Lenovo", "HP", "Dell", "Microsoft", "Samsung", "Cisco", "APC", "Tripp Lite"]
 SORT = [{"BrandName.keyword": "asc"}, {"identifier.keyword": "asc"}]
 # The site's own in / out of stock facet (every product lands in one of the two buckets)
@@ -354,6 +360,12 @@ def build_row(src, scraped_at):
         qty = None                                       # shown in stock: 0 is not a real count
     sku = src.get("identifier") or ""
     key = (src.get("pcn_url_key") or "").strip().strip("/")
+    image = (src.get("base_image") or "").strip().lstrip("/")      # "a/9/2/2/<hash>_<id>.jpg"
+    if image and not image.startswith("http"):
+        image = IMAGE_BASE + image
+    highlights = src.get("product_highlights")
+    if not isinstance(highlights, str) or FLIGHT_REF_RE.fullmatch(highlights):
+        highlights = None             # missing, or a long text left in another flight row
     return schema.product_row({
         "scraped_at": scraped_at,
         "website": SITE,
@@ -369,6 +381,8 @@ def build_row(src, scraped_at):
         "discount_pct": round((compare - price) / compare * 100, 1) if compare else None,
         "available": available,
         "stock_qty": qty,
+        "image_url": image or None,
+        "description": schema.plain_text(highlights),
         "url": f"{BASE}/{key}" if key else "",
     })
 

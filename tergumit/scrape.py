@@ -15,6 +15,7 @@ The rest comes from the page: product id (hidden input product_id), title (h1), 
 condition (the schema.org JSON-LD Product; the "Condition:" line of the page wins when shown),
 and the category path from the breadcrumbs (e.g. "Spare Parts > Memory (DIMM)"). Capacity is
 read from the title (upper-case GB/TB only) for drives and memory.
+image_url / description: the JSON-LD image (placeholder -> None) and description (URL-decoded).
 
 The number to check the snapshot against is the sitemap's product count; a page that fails
 (after common/http retries) stops the run, and a sitemap URL that is gone (404) is skipped.
@@ -25,6 +26,7 @@ import json
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import unquote
 
 from bs4 import BeautifulSoup
 
@@ -137,6 +139,18 @@ def parse(url, html, scraped_at):
     offers = offers[0] if isinstance(offers, list) and offers else offers
     ld_condition = str((offers or {}).get("itemCondition") or "").rstrip("/").split("/")[-1]
     condition = details.get("condition") or CONDITIONS.get(ld_condition.lower(), "")
+    image = ld.get("image")                 # JSON-LD image: a URL, a list of URLs or {url}
+    image = image[0] if isinstance(image, list) and image else image
+    image = image.get("url") if isinstance(image, dict) else image
+    image = clean(image) if isinstance(image, str) else ""
+    if image.startswith("//"):
+        image = "https:" + image
+    elif image.startswith("/"):
+        image = BASE + image
+    if "productdefault" in image.lower():
+        image = ""                          # the theme's "no image" placeholder, not a photo
+    # The theme URL-encodes the JSON-LD description ("SPS-DRV%20SSD%20960GB...")
+    description = schema.plain_text(unquote(str(ld.get("description") or "")))
 
     crumbs = [clean(a.get_text()) for a in soup.select(".breadcrumbs .breadcrumb-label")][:-1]
     category = " > ".join(c for c in crumbs if c and c.lower() not in GENERIC_CATEGORIES)
@@ -164,6 +178,8 @@ def parse(url, html, scraped_at):
         "compare_at_price": compare if compare and price and compare > price else None,
         "available": bool(attrs.get("instock")),
         "stock_qty": num(stock) if isinstance(stock, (int, float)) else None,
+        "image_url": image or None,
+        "description": description,
         "url": url,
     })
 

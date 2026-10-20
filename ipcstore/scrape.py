@@ -32,6 +32,7 @@ own, e.g. "6_P02468-B21_1") and MPN (data-product-mpn -> part_number), and the A
 button. Condition is read from the title when it says so, capacity from drive / memory titles
 (upper-case GB / TB, not GB/s; not from whole computers' titles); category = the walked
 category's name. No stock counts.
+image_url = the card's photo; description stays empty (the listing cards carry none).
 
 Run steps, changes and env vars: common/runner.py. Columns: common/schema.py.
 """
@@ -120,6 +121,14 @@ def parse_cards(soup, category):
         price = price_of(card, "finalPrice")
         old = price_of(card, "oldPrice")
         brand = card.select_one(".list-brand")
+        img = card.select_one("img.product-image-photo") or card.find("img")
+        image = clean(img.get("src") or img.get("data-src")) if img else ""
+        if image.startswith("//"):
+            image = "https:" + image
+        elif image.startswith("/"):
+            image = BASE + image
+        if "placeholder" in image.lower() or image.startswith("data:"):
+            image = ""                   # Magento's "no image" placeholder, not a real photo
         products.append({
             "id": box["data-product-id"],
             "title": clean(link.get_text()),
@@ -131,6 +140,7 @@ def parse_cards(soup, category):
             "price": price or None,                     # $0 = no real price
             "compare": old if old and price and old > price else None,
             "available": bool(card.select_one("button.tocart")),
+            "image": image or None,
         })
     return products
 
@@ -196,6 +206,9 @@ def build_row(p, scraped_at):
         "price_per_tb": round(p["price"] / tb, 2) if p["price"] and tb else None,
         "available": p["available"],
         "stock_qty": None,                 # not shown on the listing
+        "image_url": p["image"],
+        # description lives only on the product page; the listing cards (all we fetch) carry none
+        "description": None,
         "url": p["url"],
     })
 

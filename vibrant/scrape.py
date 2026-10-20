@@ -42,6 +42,7 @@ empty). Names are "<Brand> <Item #> <description>", so brand = the words before 
 Condition is not on the card; every product page says "Unless otherwise noted, this item is
 Refurbished", so condition is Refurbished unless the name says New / NOB (New Open Box) / Used.
 Capacity is read from drive / memory names (not whole servers). Category = the top category.
+image_url = the card's photo (placeholders -> None); description: not on cards (backfill: JSON-LD).
 
 Safety net: the product sitemaps (sitemap_products_01..04.xml, ~36k URLs, rebuilt daily) are
 compared with what the listings gave. Product URLs end in "-<item id>.html" (a few dozen are
@@ -61,7 +62,7 @@ import math
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import requests
 from bs4 import BeautifulSoup, Comment
@@ -151,6 +152,20 @@ def stock(text, count):
     return available, count
 
 
+def image_of(src):
+    """The product photo behind a thumbnail ("/resize?po=<photo url>&bh=250"), absolute, or None
+    for the store's placeholders: a category picture (/images/data-storage-300x128.jpg, also
+    behind /resize/images/...) or its logo (.../vibrant.jpg)."""
+    src = clean(src)
+    if src.startswith("/resize?"):
+        src = parse_qs(urlsplit(src).query).get("po", [""])[0]
+    if src.startswith("//"):
+        src = "https:" + src
+    if not src.startswith("http") or src.lower().endswith("/vibrant.jpg"):
+        return None
+    return src
+
+
 def page_url(path, page):
     return f"{BASE}/{path}?pi={page}&ps={PAGE_SIZE}&sort={SORT}"
 
@@ -176,6 +191,7 @@ def parse_cards(soup, category):
             item_nr = clean(nr.get_text())
         price_el = card.select_one(".CategoryProductPrice")
         retail = card.select_one(".CategoryProductRetailArea del")
+        thumb = card.select_one("img.CategoryProductThumbnail")
         products.append({
             "id": pid,
             "title": clean(link.get_text()),
@@ -187,6 +203,8 @@ def parse_cards(soup, category):
             "available": available,
             "stock_qty": qty,
             "category": category,
+            "image": image_of(thumb.get("src")) if thumb else None,
+            "description": None,                  # the listing card has no description
         })
     return products
 
@@ -305,6 +323,8 @@ def product_page(url):
     offer = data.get("offers") if isinstance(data.get("offers"), dict) else {}
     price = clean(str(offer.get("price", "")))      # "95.00", or a "Contact for Pricing" link
     item_nr = clean(str(data.get("mpn", "")))
+    image = data.get("image")                         # ["/images/data-storage-300x128.jpg"]
+    image = image[0] if isinstance(image, list) and image else image
     return {
         "id": str(data["sku"]),
         "title": clean(str(data.get("name", ""))),
@@ -317,6 +337,8 @@ def product_page(url):
         "available": available,
         "stock_qty": qty,
         "category": names.get(first, clean(trail[0].get_text()) if trail else ""),
+        "image": image_of(image) if isinstance(image, str) else None,
+        "description": schema.plain_text(data.get("description")),
     }
 
 
@@ -397,6 +419,8 @@ def build_row(p, scraped_at):
         "price_per_tb": round(price / tb, 2) if price and tb else None,
         "available": p["available"],
         "stock_qty": p["stock_qty"],
+        "image_url": p["image"],
+        "description": p["description"],
         "url": p["url"],
     })
 
