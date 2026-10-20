@@ -118,6 +118,6 @@
   "wdpi.com": "Blocked (Cloudflare)",
   "wearesync.co.uk": "Built, not live",
   "xbyte.com": "Blocked (Cloudflare)",
-  "ziestech.com": "Building",
+  "ziestech.com": "Built, not live (API exposes 106k of 213k)",
   "zones.com": "Blocked (Akamai)"
 }
