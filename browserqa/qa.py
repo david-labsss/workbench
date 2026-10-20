@@ -3,8 +3,8 @@
 The dashboard (server-scrapers-ui, Vercel Cron, Frankfurt) re-fetches 25 random products of each
 site's newest run and compares them with what was saved. Some sites it can't judge from there:
 stores that show buyers outside the US other prices or stock (naddod, staples), stores whose bot
-wall turns servers away (avoira, serverbasket), and pages that draw their price with JavaScript
-(hddprime, uptimumtech, stor3d). Here each product page is opened in Chrome from the US, like
+wall turns servers away (avoira, serverbasket, directdial, insidesystems), and pages that draw
+their price with JavaScript (hddprime, uptimumtech, stor3d). Here each product page is opened in Chrome from the US, like
 their scrapers, and read as a buyer sees it.
 
 The same rules as the dashboard's QA (src/lib/qa.ts there):
@@ -32,7 +32,7 @@ from playwright.sync_api import sync_playwright
 
 from common import db
 
-SITES = ["naddod", "staples", "avoira", "serverbasket", "hddprime", "uptimumtech", "stor3d"]
+SITES = ["naddod", "staples", "avoira", "serverbasket", "hddprime", "uptimumtech", "stor3d", "directdial", "insidesystems"]
 SAMPLE = int(os.getenv("QA_SAMPLE") or 25)  # fewer only for trying it out
 MAX_MISMATCH = 0.1
 MIN_CHECKED = 10
@@ -107,12 +107,14 @@ def amount(text):
 
 
 def in_stock(value):
+    """In stock, out of stock, or None. Back-ordered and pre-order products can be ordered but
+    aren't on the shelf: stores and scrapers call them either way, so they aren't compared."""
     s = re.sub(r"\s+", "", str(value or "")).lower()
     if not s:
         return None
     if re.search(r"instock|in_stock|limitedavailability|onlineonly", s):
         return True
-    if re.search(r"outofstock|out_of_stock|soldout|discontinued|preorder|backorder", s):
+    if re.search(r"outofstock|out_of_stock|soldout|discontinued", s):
         return False
     return None
 
@@ -146,9 +148,10 @@ def live_product(page, row):
         availability = in_stock(seen["metaAvailability"])
     if availability is None:
         availability = next((in_stock(o["availability"]) for o in seen["ld"] if in_stock(o["availability"]) is not None), None)
-    quoted = not row["price"] and QUOTE_ONLY.search(seen["text"])
-    if quoted:
-        return {"price": None, "available": availability}
+    # A product saved without a price whose page asks for a quote: the price and stock in the
+    # page's data are ones the store hides ("Contact for pricing / availability").
+    if not row["price"] and QUOTE_ONLY.search(seen["text"]):
+        return {"price": None, "available": None}
     price = amount(offer["price"]) if offer else amount(seen["metaPrice"])
     if price is None and len(offers) > 1:
         raise Unclear("the page lists several prices")
