@@ -94,6 +94,9 @@ def build_row(p, scraped_at):
         "compare_at_price": original if price is not None and original and original > price else None,
         "available": None,                # the store doesn't show stock
         "stock_qty": None,
+        "image_url": p.get("thumbnail") or None,   # absolute Medusa cdn url; None for some parts
+        # loadMoreProducts returns no description (only metadata: brand/condition/part_number/specs)
+        "description": None,
         "url": f"{BASE}/products/{p['handle']}",
     })
 

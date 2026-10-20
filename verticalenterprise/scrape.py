@@ -88,6 +88,21 @@ def build_row(url, html, scraped_at):
     pm = PRICE_RE.search(price_text)
     part = fields.get("part number", "")
     model = fields.get("model number", "")
+
+    # Description: the product page's #description tab (drop its "Description" sub-heading),
+    # falling back to the short .description block.
+    desc_el = soup.find(id="description") or soup.select_one(".description")
+    if desc_el:
+        for heading in desc_el.select(".mobile-title"):
+            heading.extract()
+        description = schema.plain_text(desc_el.get_text(" "))
+    else:
+        description = None
+    # Image: the shop renders product images client-side - the fetched HTML has no <img> and no
+    # og:image - so image_url is usually None (nothing to read without a JS render).
+    og = soup.find("meta", property="og:image")
+    image_url = urljoin(BASE, og["content"]) if og and og.get("content") else None
+
     return schema.product_row({
         "scraped_at": scraped_at,
         "website": SITE,
@@ -101,6 +116,8 @@ def build_row(url, html, scraped_at):
         "condition": fields.get("condition", "").title(),
         "price": float(pm.group(0).replace(",", "")) if pm else None,
         "available": True,          # priced shop; stock not exposed
+        "image_url": image_url,
+        "description": description,
         "url": url,
     })
 

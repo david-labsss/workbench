@@ -92,6 +92,27 @@ def to_float(v):
         return None
 
 
+def absolute(u):
+    """Absolute https URL for a possibly relative/protocol-relative one, else None."""
+    u = (u or "").strip()
+    if not u:
+        return None
+    if u.startswith("//"):
+        return "https:" + u
+    if u.startswith("/"):
+        return BASE + u
+    return u
+
+
+def first_image(value):
+    """First image URL from a JSON-LD "image" value (str / list / {url}), absolute, or None."""
+    if isinstance(value, list):
+        value = value[0] if value else None
+    if isinstance(value, dict):
+        value = value.get("url")
+    return absolute(value)
+
+
 def tb_size(capacity):
     """Capacity string ('2TB', '480GB') -> size in TB, for price_per_tb."""
     m = CAPACITY_RE.search(capacity or "")
@@ -184,6 +205,8 @@ def parse(url, html, category, scraped_at):
             other.append(f"{name}: {value}")
     capacity = specs.get("capacity", "")
     tb = tb_size(capacity) if category in DRIVE_CATEGORIES else None
+    image_url = first_image(prod.get("image"))
+    description = schema.plain_text(prod.get("description"))
 
     # data-id is the internal product id, shared by a product's conditions (one add-to-cart
     # button per condition, same data-id).
@@ -234,6 +257,8 @@ def parse(url, html, category, scraped_at):
             "compare_at_price": was if was and was > price else None,
             "price_per_tb": round(price / tb, 2) if price and tb else None,
             "available": avail == "InStock",
+            "image_url": image_url,
+            "description": description,
             "url": offer.get("url") or prod.get("url") or url,
         }))
     return rows

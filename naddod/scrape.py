@@ -20,6 +20,7 @@ import html
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urljoin
 
 from common import http, runner, schema
 
@@ -50,6 +51,17 @@ def to_float(v):
         return float(str(v).replace(",", ""))
     except (TypeError, ValueError):
         return None
+
+
+def abs_image(img):
+    """First image URL from a schema.org image value (str / list / ImageObject), absolute."""
+    if isinstance(img, list):
+        img = img[0] if img else None
+    if isinstance(img, dict):
+        img = img.get("url") or img.get("contentUrl")
+    if not isinstance(img, str) or not img.strip():
+        return None
+    return urljoin(BASE, img.strip())
 
 
 def product_urls():
@@ -141,6 +153,8 @@ def parse(url, html, scraped_at):
         "condition": condition,
         "price": to_float(offers.get("price")),
         "available": available_from(offers.get("availability")),
+        "image_url": abs_image(product.get("image")),
+        "description": schema.plain_text(product.get("description")),
         "url": url,
     })
 

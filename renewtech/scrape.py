@@ -209,6 +209,21 @@ def build_row(url, html, scraped_at, currency_seen):
         available = ("product_addtocart_form" in html or "available" in body_classes) \
             and not any(w in low for w in OOS_WORDS)
 
+    image = (ld or {}).get("image")
+    if isinstance(image, list):
+        image = image[0] if image else ""
+    if isinstance(image, dict):
+        image = image.get("url") or ""
+    image = clean(image) if image else ""
+    if not image:
+        image = _meta(soup, property="og:image")
+    if image.startswith("//"):
+        image = "https:" + image
+    elif image.startswith("/"):
+        image = BASE + image
+    description = (ld or {}).get("description") or _meta(soup, property="og:description") \
+        or _meta(soup, name="description")
+
     product_id = entity_id or sku or clean(url.split("?")[0].rstrip("/").split("/")[-1])
     if not product_id:
         return None
@@ -221,6 +236,8 @@ def build_row(url, html, scraped_at, currency_seen):
         "price": price,
         "compare_at_price": compare if (price and compare and compare > price) else None,
         "available": available,
+        "image_url": image or None,
+        "description": schema.plain_text(description),
         "url": url.split("?")[0],
     })
 

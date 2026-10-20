@@ -112,6 +112,8 @@ def build_row(p, fallback_cat, scraped_at):
         "compare_at_price": compare if (compare and price and compare > price) else None,
         "available": bool(p.get("inStock")),
         "stock_qty": to_float(p.get("stockCount")),
+        "image_url": (p.get("thumbnail") or "").strip() or None,  # absolute images.datafox.ee URL
+        "description": None,  # catalogue payload carries no description field
         "url": f"{BASE}/en/{cat}/{slug}" if slug else f"{BASE}/en/{cat}",
     })
 

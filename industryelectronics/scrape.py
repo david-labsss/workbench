@@ -185,6 +185,10 @@ def parse(url, html_text, scraped_at):
     brand = product.get("brand")
     brand = clean(brand.get("name")) if isinstance(brand, dict) else clean(brand)
     condition = str(offers.get("itemCondition") or "").rsplit("/", 1)[-1].replace("Condition", "")
+    image = product.get("image")
+    if isinstance(image, list):
+        image = image[0] if image else ""
+    image_url = clean(image) or None
     return schema.product_row({
         "scraped_at": scraped_at,
         "website": SITE,
@@ -197,6 +201,8 @@ def parse(url, html_text, scraped_at):
         "condition": condition,
         "price": to_float(offers.get("price")),
         "available": available_from(offers.get("availability")),
+        "image_url": image_url,
+        "description": schema.plain_text(product.get("description")),
         "url": url,
     })
 

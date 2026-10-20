@@ -136,6 +136,8 @@ def results(html):
                 condition = text[len("condition"):].strip()
         price = card.select_one(".product-price")
         m = PRICE_RE.search(price.get_text()) if price else None
+        img = card.select_one("figure img")
+        image_url = (img.get("src") or img.get("data-src")) if img else ""  # images.compudevices.com, absolute
         out.append({
             "id": button.get("data-id") if button else None,
             "title": clean(link.get_text()),
@@ -143,6 +145,7 @@ def results(html):
             "condition": condition[:1].upper() + condition[1:],
             "price": float(m.group(0).replace(",", "")) if m else None,
             "available": bool(button),
+            "image_url": image_url or "",
             "url": link.get("href", ""),
         })
     return out
@@ -186,6 +189,9 @@ def scrape(limit, scraped_at):
                 "condition": r["condition"],
                 "price": r["price"],
                 "available": r["available"],
+                "image_url": r.get("image_url") or None,
+                # the search-result card has no description; the product page isn't fetched
+                "description": None,
                 "url": r["url"],
             }))
 

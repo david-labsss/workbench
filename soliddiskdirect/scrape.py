@@ -93,6 +93,10 @@ def build_row(p, scraped_at):
         "compare_at_price": struck if struck and price and struck > price else None,
         "available": None,                                       # not published
         "stock_qty": None,
+        # thumbnail is an absolute admin.soliddiskdirect.com url; images is [{image: url}]
+        "image_url": clean(p.get("thumbnail")) or next(
+            (clean(i.get("image")) for i in (p.get("images") or []) if i.get("image")), None),
+        "description": schema.plain_text(p.get("short_description") or p.get("full_description")),
         "url": f"{BASE}/products/{p.get('category_url')}/{mpn}" if mpn else "",
     })
 

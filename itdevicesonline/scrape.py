@@ -215,6 +215,8 @@ def build_row(p, slug, scraped_at):
         "price": price,
         "compare_at_price": to_price(p.get("originalPrice")),
         "available": bool(p.get("inStock")),
+        "image_url": p.get("image") or None,
+        "description": schema.plain_text(p.get("description")),
         "url": f"{BASE}/product-details/{p['id']}",
     })
 

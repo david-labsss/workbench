@@ -79,6 +79,13 @@ def parse_card(card, scraped_at):
         else:
             specs.append(t)
 
+    img_el = card.select_one("img")
+    image = (img_el.get("src") or img_el.get("data-src")) if img_el else None
+    if image:
+        image = "https:" + image if image.startswith("//") else (
+            BASE + image if image.startswith("/") else image)
+    # The listing card has no product description, only the "Product Highlights" spec block,
+    # which is already captured in other_specs. Description left None.
     return schema.product_row({
         "scraped_at": scraped_at, "website": SITE,
         "product_id": product_id, "sku": product_id,
@@ -89,6 +96,8 @@ def parse_card(card, scraped_at):
         "compare_at_price": compare,
         "available": "in stock" in avail_text,
         "other_specs": "; ".join(specs),
+        "image_url": image,
+        "description": None,
         "url": BASE + href if href.startswith("/") else href,
     })
 

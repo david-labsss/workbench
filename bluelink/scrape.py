@@ -76,6 +76,9 @@ def build_row(url, html, scraped_at):
     avail = str(offer.get("availability") or "").lower()
     cond = str(offer.get("itemCondition") or "").lower()
     condition = next((v for k, v in CONDITIONS.items() if k in cond), "")
+    image = ld.get("image")                 # JSON-LD image: a single URL or a list of URLs
+    image = image[0] if isinstance(image, list) and image else image
+    image = clean(image) or None if isinstance(image, str) else None
     return schema.product_row({
         "scraped_at": scraped_at, "website": SITE,
         "product_id": code,
@@ -84,6 +87,8 @@ def build_row(url, html, scraped_at):
         "condition": condition,
         "price": price,
         "available": "instock" in avail or "limitedavailability" in avail,
+        "image_url": image,
+        "description": schema.plain_text(ld.get("description")),
         "url": url,
     })
 

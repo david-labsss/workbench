@@ -72,7 +72,7 @@ def search(class_id, sellable, start):
         "request_type": "search", "search_type": "category",
         "q": class_id, "rows": ROWS, "start": start,
         "sort": "price asc",
-        "fl": "pid,title,brand,price,sale_price,url",
+        "fl": "pid,title,brand,price,sale_price,url,thumb_image,description",
         "fq": f'is_sellable:"{sellable}"',
         "url": "https://www.staples.com/",
         "_br_uid_2": "uid=7797686432023:v=11.5:ts=1428617911187:hc=55",
@@ -126,6 +126,8 @@ def build_row(doc, category, available, scraped_at):
         "compare_at_price": listed if (listed and price and listed > price) else None,
         "available": available,
         "stock_qty": None,          # not exposed by the search API
+        "image_url": (doc.get("thumb_image") or "").strip() or None,  # absolute staples-3p.com URL
+        "description": schema.plain_text(doc.get("description")),
         "url": url,
     })
 

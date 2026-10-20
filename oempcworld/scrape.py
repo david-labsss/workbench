@@ -58,6 +58,8 @@ def build_rows(product, scraped_at):
             "compare_at_price": to_float(v.get("compare_at_price")),
             "available": bool(v.get("available")),
             "stock_qty": None,  # not published by the public /products.json endpoint
+            "image_url": (product.get("images") or [{}])[0].get("src") or None,
+            "description": schema.plain_text(product.get("body_html")),
             "url": f"{BASE}/products/{product['handle']}"
             + (f"?variant={v['id']}" if len(variants) > 1 else ""),
         }))

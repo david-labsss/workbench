@@ -94,6 +94,15 @@ def build_row(card, brand, scraped_at):
         url = BASE + url
     title = clean(a.get("title") or a.get_text())
     price = card_price(card)
+    # product thumbnail on the card (skip the availability "dostepnosc" status icon)
+    img = next((im for im in card.find_all("img")
+                if "dostepnosc" not in (im.get("src") or im.get("data-src") or "")), None)
+    image = (img.get("data-src") or img.get("src")) if img else None
+    if image:
+        image = "https:" + image if image.startswith("//") else (
+            BASE + image if image.startswith("/") else image)
+    # The listing cards carry no product description; a description would need a per-product
+    # page fetch, which this scraper deliberately avoids. Left None.
     return schema.product_row({
         "scraped_at": scraped_at, "website": SITE,
         "product_id": str(pid),
@@ -101,6 +110,8 @@ def build_row(card, brand, scraped_at):
         "condition": card_condition(card),
         "price": price,
         "available": card_available(card, price),
+        "image_url": image,
+        "description": None,
         "url": url,
     })
 

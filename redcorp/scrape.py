@@ -18,6 +18,7 @@ import json
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urljoin
 
 import requests
 
@@ -112,6 +113,17 @@ def to_float(v):
         return None
 
 
+def abs_image(img):
+    """First image URL from a schema.org image value (str / list / ImageObject), absolute."""
+    if isinstance(img, list):
+        img = img[0] if img else None
+    if isinstance(img, dict):
+        img = img.get("url") or img.get("contentUrl")
+    if not isinstance(img, str) or not img.strip():
+        return None
+    return urljoin(BASE, img.strip())
+
+
 def parse(url, scraped_at):
     r = get(url)
     if r.status_code == 404:
@@ -145,6 +157,8 @@ def parse(url, scraped_at):
         "capacity": (cap.group(1) + cap.group(2).upper()) if cap else "",
         "price": to_float(offer.get("price")),
         "available": "instock" in avail or "preorder" in avail or "limitedavailability" in avail,
+        "image_url": abs_image(node.get("image")),
+        "description": schema.plain_text(node.get("description")),
         "url": clean(offer.get("url")) or url,
     })
 

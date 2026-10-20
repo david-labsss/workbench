@@ -119,6 +119,9 @@ def parse(html, url, url_sku):
     price = to_price(offer.get("price"))
     if price is None:
         price = data_price(html)
+    image = product.get("image")
+    if isinstance(image, list):
+        image = image[0] if image else ""
     return {
         "scraped_at": None,  # filled by scrape()
         "website": SITE,
@@ -131,6 +134,8 @@ def parse(html, url, url_sku):
         "condition": condition(offer),
         "price": price,
         "available": "instock" in availability.lower(),
+        "image_url": (str(image).strip() if image else "") or None,
+        "description": schema.plain_text(product.get("description")),
         "url": url,
     }
 

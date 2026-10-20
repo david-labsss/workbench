@@ -136,6 +136,8 @@ def build_row(p, scraped_at):
         "discount_pct": round((compare - price) / compare * 100, 1) if compare else None,
         "available": p.get("availability") == "in stock",
         "stock_qty": to_float(p.get("stock_quantity")),
+        "image_url": clean(p.get("image_link")) or None,   # Doofinder indexes an absolute cdn url
+        "description": schema.plain_text(p.get("description")),
         "url": clean(p.get("link")),
     })
 

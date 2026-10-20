@@ -77,6 +77,12 @@ def parse_card(card, category, scraped_at):
 
     brand_el = card.select_one(".product-category")
     text = card.get_text(" ", strip=True).lower()
+    img_el = card.select_one("img")
+    image = (img_el.get("data-src") or img_el.get("src")) if img_el else None
+    if image:
+        image = "https:" + image if image.startswith("//") else (
+            BASE + image if image.startswith("/") else image)
+    # The listing card carries no product description (only title/brand/price), so it is None.
     return schema.product_row({
         "scraped_at": scraped_at, "website": SITE,
         "product_id": product_id, "sku": product_id,
@@ -86,6 +92,8 @@ def parse_card(card, category, scraped_at):
         "price": price,
         "compare_at_price": old_price,
         "available": not any(s in text for s in OOS),
+        "image_url": image,
+        "description": None,
         "url": url,
     })
 

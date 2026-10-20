@@ -47,6 +47,27 @@ def to_price(v):
     return f if f and f > 0 else None
 
 
+def absolute(u):
+    """Absolute https URL for a possibly relative/protocol-relative one, else None."""
+    u = (u or "").strip()
+    if not u:
+        return None
+    if u.startswith("//"):
+        return "https:" + u
+    if u.startswith("/"):
+        return BASE + u
+    return u
+
+
+def first_image(value):
+    """First image URL from a JSON-LD "image" value (str / list / {url}), absolute, or None."""
+    if isinstance(value, list):
+        value = value[0] if value else None
+    if isinstance(value, dict):
+        value = value.get("url")
+    return absolute(value)
+
+
 def product_urls():
     r = http.session().get(f"{BASE}/sitemap.xml", timeout=120)
     r.raise_for_status()
@@ -91,10 +112,20 @@ def condition_rows(url, html, scraped_at):
     select = soup.find("select", id="cond")
     options = select.find_all("option") if select else []
 
+    image_url = first_image(ld.get("image"))
+    if not image_url:
+        og = soup.find("meta", property="og:image")
+        image_url = absolute(og.get("content")) if og else None
+    description = schema.plain_text(ld.get("description"))
+    if not description:
+        md = soup.find("meta", attrs={"name": "description"})
+        description = schema.plain_text(md.get("content")) if md else None
+
     common = {
         "scraped_at": scraped_at, "website": SITE,
         "sku": mpn, "part_number": mpn, "model_number": mpn,
-        "title": title, "brand": brand, "category": family, "url": url,
+        "title": title, "brand": brand, "category": family,
+        "image_url": image_url, "description": description, "url": url,
     }
 
     # Quote-only product: no sellable conditions, no price.

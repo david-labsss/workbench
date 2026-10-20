@@ -258,6 +258,8 @@ def build_rows(product, stock_by_variant, scraped_at, prev_by_id):
             "available": bool(v.get("available")),
             "stock_qty": stock,
             "other_specs": other,
+            "image_url": (product.get("images") or [{}])[0].get("src") or None,
+            "description": schema.plain_text(product.get("body_html")),
             "url": f"{BASE}/products/{product['handle']}"
             + (f"?variant={v['id']}" if len(variants) > 1 else ""),
         }

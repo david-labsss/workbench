@@ -59,7 +59,8 @@ DELAY = 0.3          # polite pause between requests
 PRODUCT_FIELDS = (
     "uid sku name url_key url_suffix stock_status only_x_left_in_stock manufacturer "
     "price_range{minimum_price{regular_price{value} final_price{value}}} "
-    "categories{name url_path}"
+    "categories{name url_path} "
+    "image{url} small_image{url} short_description{html} description{html}"
 )
 
 CONDITIONS = [
@@ -180,6 +181,9 @@ def add_item(item, seen, scraped_at, mfr):
     brand = mfr.get(str(item.get("manufacturer"))) if item.get("manufacturer") is not None else ""
     url_key = item.get("url_key") or ""
     url = f"{BASE}/{url_key}{item.get('url_suffix') or ''}" if url_key else BASE
+    image = (item.get("image") or {}).get("url") or (item.get("small_image") or {}).get("url")
+    description = schema.plain_text((item.get("short_description") or {}).get("html")) \
+        or schema.plain_text((item.get("description") or {}).get("html"))
     seen[pid] = schema.product_row({
         "scraped_at": scraped_at,
         "website": SITE,
@@ -196,6 +200,8 @@ def add_item(item, seen, scraped_at, mfr):
         "compare_at_price": regular if (final and regular and regular > final) else None,
         "available": item.get("stock_status") == "IN_STOCK",
         "stock_qty": item.get("only_x_left_in_stock"),
+        "image_url": image or None,
+        "description": description,
         "url": url,
     })
 

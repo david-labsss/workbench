@@ -117,6 +117,8 @@ def build_row(url, html, scraped_at):
         "price": price,
         "available": available,
         "other_specs": delivery_text,
+        "image_url": _meta(soup, property="og:image") or None,  # absolute img.ram-koenig.de URL
+        "description": None,  # product pages expose no description (JSON-LD/og/meta all empty)
         "url": url,
     })
 

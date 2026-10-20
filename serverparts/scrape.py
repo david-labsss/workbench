@@ -84,6 +84,13 @@ def build_row(url, html, scraped_at):
     avail = str(offer.get("availability") or "").lower()
     cond = str(offer.get("itemCondition") or "").lower()
     condition = next((v for k, v in CONDITIONS.items() if k in cond), "")
+    # JSON-LD "image" is the real product photo when the product has one, and the site logo
+    # (/media/img/logo.png) when it doesn't -- store None in that case, not the logo.
+    image = ld.get("image")
+    image = image[0] if isinstance(image, list) and image else image
+    image = clean(image) if isinstance(image, str) else None
+    if image and "/media/img/" in image:
+        image = None
     return schema.product_row({
         "scraped_at": scraped_at, "website": SITE,
         "product_id": url_id or internal or sku,
@@ -92,6 +99,8 @@ def build_row(url, html, scraped_at):
         "condition": condition,
         "price": price,
         "available": "instock" in avail or "limitedavailability" in avail,
+        "image_url": image,
+        "description": schema.plain_text(ld.get("description")),
         "url": url,
     })
 

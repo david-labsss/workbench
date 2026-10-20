@@ -20,6 +20,7 @@ Run steps, changes and env vars: common/runner.py. Columns: common/schema.py.
 import re
 import sys
 import time
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
@@ -80,6 +81,10 @@ def parse_page(html, scraped_at):
             if card.select_one(".listingDescription") else ""
         cond = COND_RE.search(desc)
         brand = BRAND_RE.search(desc)
+        img = card.select_one("img.listingProductImage") or card.find("img")
+        img_src = img.get("src") if img else ""
+        image_url = urljoin(BASE + "/", img_src) if img_src and not img_src.startswith(
+            "data:") else None
         # part_number / model live only in the product page's clean fields (optional pass);
         # the truncated listing snippet is too inconsistent to read them from reliably.
         rows.append(schema.product_row({
@@ -93,6 +98,10 @@ def parse_page(html, scraped_at):
             "price": price,
             "compare_at_price": compare,
             "available": in_stock,
+            "image_url": image_url,
+            # the listing's truncated .listingDescription snippet (all we fetch; the full text
+            # lives on the slow product pages, which this scraper does not open).
+            "description": schema.plain_text(desc),
             "url": url,
         }))
     return rows

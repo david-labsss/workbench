@@ -116,6 +116,14 @@ def parse(url, html, scraped_at):
     specs, other = spec_table(soup)
     condition = next((label for rx, label in CONDITIONS if rx.search(title)), "")
     cap = CAPACITY_RE.search(specs.get("capacity") or title)
+    og_image = soup.select_one("meta[property='og:image']")
+    image_url = clean(og_image.get("content")) if og_image else ""
+    if not image_url:
+        img = soup.select_one("[itemprop=image]")
+        src = (img.get("content") or img.get("src")) if img else ""
+        image_url = ("https:" + src if src.startswith("//") else src) if src else ""
+    meta_desc = (soup.select_one("meta[name=description]")
+                 or soup.select_one("meta[property='og:description']"))
     return schema.product_row({
         "scraped_at": scraped_at,
         "website": SITE,
@@ -136,6 +144,8 @@ def parse(url, html, scraped_at):
         "price": to_float(price.get("content") or price.get_text()) if price else None,
         "available": in_stock,
         "stock_qty": stock,
+        "image_url": image_url or None,                                  # og:image is absolute
+        "description": schema.plain_text(meta_desc.get("content")) if meta_desc else None,
         "url": url,
     })
 

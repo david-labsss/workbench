@@ -96,6 +96,9 @@ def parse(url, html, scraped_at):
                               "[data-product-non-sale-price-without-tax]"))) if x), default=None)
     sku = details.get("sku", "")
     in_stock = bool(button) and (button.get("value") or "").lower().startswith(IN_STOCK_BUTTONS)
+    image = soup.select_one(".productView-image img")
+    image_url = (image.get("src") or image.get("data-src")) if image else ""   # cdn11 absolute url
+    desc = soup.select_one("#tab-description")
     return schema.product_row({
         "scraped_at": scraped_at,
         "website": SITE,
@@ -110,6 +113,8 @@ def parse(url, html, scraped_at):
         "compare_at_price": compare if compare and price and compare > price else None,
         "available": in_stock,
         "stock_qty": float(stock_text) if stock_text.isdigit() else None,
+        "image_url": image_url or None,
+        "description": schema.plain_text(desc.get_text(" ")) if desc else None,
         "url": url,
     })
 

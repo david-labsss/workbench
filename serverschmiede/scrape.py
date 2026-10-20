@@ -14,6 +14,7 @@ Run steps, changes and env vars: common/runner.py. Columns: common/schema.py.
 """
 import re
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
@@ -74,6 +75,11 @@ def build_row(url, html, scraped_at):
     price = eur(basis.get_text()) if basis else None
     text = html.lower()
     available = price is not None and not any(s in text for s in OOS)
+    # og:image is only the site logo; the product photo is the /product_images/ <img>
+    img = soup.find("img", src=re.compile(r"/product_images/"))
+    image_url = urljoin(BASE, img.get("src")) if img and img.get("src") else None
+    meta_desc = soup.find("meta", attrs={"name": "description"})
+    description = schema.plain_text(meta_desc.get("content")) if meta_desc else None
     return schema.product_row({
         "scraped_at": scraped_at, "website": SITE,
         "product_id": product_id, "sku": product_id,
@@ -81,6 +87,8 @@ def build_row(url, html, scraped_at):
         "brand": brand(title),
         "price": price,
         "available": available,
+        "image_url": image_url,
+        "description": description,
         "url": url,
     })
 

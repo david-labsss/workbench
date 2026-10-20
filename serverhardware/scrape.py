@@ -112,6 +112,11 @@ def build_row(url, html, scraped_at):
              for l in soup.select("link[itemprop='availability']")}
     available = "instock" in avail
 
+    image_url = _meta(soup, "og:image") or None
+    desc_el = soup.select_one(".product-detail-description-text") \
+        or soup.select_one(".product-detail-description")
+    description = desc_el.decode_contents() if desc_el else _meta(soup, "og:description")
+
     return schema.product_row({
         "scraped_at": scraped_at, "website": SITE,
         "product_id": product_id, "sku": product_id,
@@ -120,6 +125,8 @@ def build_row(url, html, scraped_at):
         "category": _breadcrumb_category(soup),
         "price": price,
         "available": available,
+        "image_url": image_url,
+        "description": schema.plain_text(description),
         "url": url,
     })
 

@@ -43,6 +43,28 @@ def to_float(text):
     return float(m.group(0).replace(",", "")) if m else None
 
 
+def absolute(u):
+    """Absolute https URL for a possibly relative/protocol-relative one, else None."""
+    u = (u or "").strip()
+    if not u:
+        return None
+    if u.startswith("//"):
+        return "https:" + u
+    if u.startswith("/"):
+        return BASE + u
+    return u
+
+
+def card_image(item):
+    """The listing card's thumbnail URL, absolute, or None. The .product_image div is populated
+    client-side on most pages, so the fetched HTML usually has no <img> and this returns None."""
+    img = item.find("img")
+    if not img:
+        return None
+    src = img.get("data-src") or img.get("src") or ""
+    return None if src.startswith("data:") else absolute(src)
+
+
 def sitemap_count():
     """How many products the catalogue lists (the authoritative total)."""
     r = http.session().get(f"{BASE}/sitemap.xml", timeout=120)
@@ -92,6 +114,10 @@ def parse_card(item, scraped_at, category=""):
         "price": to_float(price_el.get_text()) if price_el else None,
         "available": "yes" in stock_text.lower(),
         "stock_qty": float(qty_m.group(1).replace(",", "")) if qty_m else None,
+        "image_url": card_image(item),
+        # description lives only on the product page; the listing (all we fetch) carries none,
+        # so it is left blank - fetching ~40k product pages just for it would be far too slow.
+        "description": None,
         "url": href if href.startswith("http") else BASE + href,
     })
 

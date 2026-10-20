@@ -62,7 +62,7 @@ CONDITIONS = [
 _local = threading.local()
 
 PRODUCT_FIELDS = """
-  id title handle vendor productType availableForSale createdAt
+  id title handle vendor productType availableForSale createdAt featuredImage { url } descriptionHtml
   variants(first: 10) {
     pageInfo { hasNextPage }
     nodes { id sku title price { amount } compareAtPrice { amount } availableForSale }
@@ -237,6 +237,8 @@ def build_rows(n, scraped_at):
         print(f"WARN product {product_id} has more than {VARIANTS} variants; some are skipped",
               flush=True)
     multi = len(nodes) > 1
+    image_url = (n.get("featuredImage") or {}).get("url") or None
+    description = schema.plain_text(n.get("descriptionHtml"))
     rows = []
     for v in nodes:
         vid = v["id"].rsplit("/", 1)[-1]
@@ -261,6 +263,8 @@ def build_rows(n, scraped_at):
             "compare_at_price": compare if compare else "",
             "available": bool(v.get("availableForSale")),
             "stock_qty": None,   # not published by the store
+            "image_url": image_url,
+            "description": description,
             "url": f"{BASE}/products/{n.get('handle')}" + (f"?variant={vid}" if multi else ""),
         }))
     return rows

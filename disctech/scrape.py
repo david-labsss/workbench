@@ -98,6 +98,16 @@ def to_float(v):
         return None
 
 
+def first_image(item):
+    """The main product image url (absolute). itemimages_detail is {group: {urls: [{url}]}}."""
+    detail = item.get("itemimages_detail") or {}
+    for group in detail.values():
+        for u in (group or {}).get("urls") or []:
+            if u.get("url"):
+                return u["url"]
+    return None
+
+
 def build_row(item, scraped_at):
     price = to_float((item.get("onlinecustomerprice_detail") or {}).get("onlinecustomerprice")
                      or item.get("onlinecustomerprice"))
@@ -125,6 +135,9 @@ def build_row(item, scraped_at):
         "price": price,
         "available": bool(item.get("isinstock")),
         "stock_qty": to_float(item.get("quantityavailable")),
+        "image_url": first_image(item),
+        "description": schema.plain_text(item.get("storedescription")
+                                         or item.get("description")),
         "url": f"{BASE}/{item.get('urlcomponent')}" if item.get("urlcomponent") else "",
     })
 

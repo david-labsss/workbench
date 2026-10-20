@@ -55,6 +55,18 @@ def money(text):
     return float(m.group(0).replace(",", "")) if m else None
 
 
+def absolute(u):
+    """Absolute https URL for a possibly relative/protocol-relative one, else None."""
+    u = (u or "").strip()
+    if not u or u.startswith("data:"):
+        return None
+    if u.startswith("//"):
+        return "https:" + u
+    if u.startswith("/"):
+        return BASE + u
+    return u
+
+
 def get(url):
     r = http.session().get(url, timeout=60)
     r.raise_for_status()
@@ -108,6 +120,12 @@ def parse_cards(html, scraped_at, category=""):
         pid = sku or url.rstrip("/").rsplit("/", 1)[-1]
         if not pid:
             continue
+        # The product thumbnail sits in the same .wa-products wrapper as this list caption.
+        wrapper = card.find_parent(class_="wa-products")
+        img = wrapper.find("img") if wrapper else None
+        image_url = absolute(img.get("src")) if img else None
+        if image_url and "no-image" in image_url.lower():
+            image_url = None             # the store's "no image" placeholder, not a real photo
         rows.append(schema.product_row({
             "scraped_at": scraped_at,
             "website": SITE,
@@ -122,6 +140,10 @@ def parse_cards(html, scraped_at, category=""):
             "price": price,
             "compare_at_price": compare if compare and price and compare > price else None,
             "available": price is not None,
+            "image_url": image_url,
+            # description lives only on the product page; these category listings (all we fetch)
+            # carry none, and this is a huge catalogue, so a per-product fetch is out.
+            "description": None,
             "url": url,
         }))
     return rows

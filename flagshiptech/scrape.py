@@ -97,11 +97,14 @@ def parse_compare(html):
         title = card.select_one(".card-title a")
         brand = card.select_one(".card-text a")
         description = details.get("Description", [])
+        img = card.select_one(".card-figure img") or card.select_one("img")
+        image_url = (img.get("src") or img.get("data-src")) if img else ""
         products.append({
             "id": pid,
             "title": clean(title.get_text()) if title else "",
             "url": (title.get("href") or "") if title else "",
             "brand": clean(brand.get_text()) if brand else "",
+            "image_url": image_url or "",   # BigCommerce cdn url, absolute
             "price": money(card.select_one("[data-product-price-without-tax]")),
             "rrp": money(card.select_one("[data-product-rrp-price-without-tax]")),
             "non_sale": money(card.select_one("[data-product-non-sale-price-without-tax]")),
@@ -151,6 +154,8 @@ def build_row(p, scraped_at):
         "compare_at_price": compare if compare and price and compare > price else None,
         "available": p["button"] in IN_STOCK_BUTTONS,
         "stock_qty": None,       # not shown on the comparison page
+        "image_url": p.get("image_url") or None,
+        "description": schema.plain_text(p.get("description")),
         "url": p["url"],
     })
 

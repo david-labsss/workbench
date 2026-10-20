@@ -141,6 +141,12 @@ def parse_boxes(html, category, scraped_at):
         dtext = clean(delivery.get_text()).lower() if delivery else ""
         available = True if not dtext else ("lieferbar" in dtext and "nicht" not in dtext)
         title = clean(data.get("name")) or (clean(a.get("title")) if a else "")
+        img = box.select_one("img.jacob-product-image") or box.select_one("img")
+        src = (img.get("src") if img else "") or ""
+        if src.startswith("//"):
+            src = "https:" + src
+        elif src.startswith("/"):
+            src = BASE + src
         rows.append(schema.product_row({
             "scraped_at": scraped_at, "website": SITE,
             "product_id": product_id, "sku": product_id,
@@ -150,6 +156,8 @@ def parse_boxes(html, category, scraped_at):
             "price": price,
             "available": available,
             "other_specs": dtext,
+            "image_url": src or None,
+            "description": None,   # listing cards carry no product description
             "url": url,
         }))
     return rows

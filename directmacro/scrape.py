@@ -71,6 +71,7 @@ PRICE_EDGES = [0.005] + [e + 0.005 for e in (
 
 PRODUCT_FIELDS = (
     "__typename uid sku name url_key url_suffix stock_status only_x_left_in_stock "
+    "image{url} description{html} "
     "price_range{minimum_price{regular_price{value} final_price{value}}} "
     "categories{name url_path} ... on SimpleProduct{weight}"
 )
@@ -379,6 +380,9 @@ def build_rows(item, condition, tags, spec_labels, scraped_at):
             "name": f"{item['name'].strip()} - {' / '.join(options.values())}",
             "categories": item.get("categories"),
             "url_key": item["url_key"], "url_suffix": item.get("url_suffix"),
+            # variants aren't fetched with image/description: fall back to the parent's
+            "image": v["product"].get("image") or item.get("image"),
+            "description": v["product"].get("description") or item.get("description"),
         }
         variant_condition = options.pop("condition", condition)
         rows.append(build_row(
@@ -450,6 +454,8 @@ def build_row(item, condition, tags, spec_labels, scraped_at, product_id=None,
         "available": item.get("stock_status") == "IN_STOCK",
         "stock_qty": item.get("only_x_left_in_stock"),  # null on this store: no exact count
         "other_specs": "; ".join(other),
+        "image_url": (item.get("image") or {}).get("url") or None,  # Magento returns an absolute url
+        "description": schema.plain_text((item.get("description") or {}).get("html")),
         "url": f"{BASE}/{item['url_key']}{item.get('url_suffix') or '.html'}",
     }
     return schema.product_row(row)

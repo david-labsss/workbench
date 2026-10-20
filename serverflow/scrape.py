@@ -139,6 +139,19 @@ def parse_product(html, url, scraped_at):
     card_text = card.get_text(" ", strip=True).lower()
     condition = "Used (Б/У)" if "б/у" in card_text else ""
     path = re.sub(r"^https?://[^/]+", "", url).strip("/")
+    og_image = soup.find("meta", property="og:image")
+    image = og_image.get("content") if og_image else None
+    if not image:
+        img_el = soup.find(attrs={"itemprop": "image"})
+        image = (img_el.get("content") or img_el.get("src")) if img_el else None
+    if image:
+        image = "https:" + image if image.startswith("//") else (
+            BASE + image if image.startswith("/") else image)
+    desc_el = soup.find(attrs={"itemprop": "description"})
+    description = (desc_el.get("content") or desc_el.get_text(" ", strip=True)) if desc_el else None
+    if not description:
+        og_desc = soup.find("meta", property="og:description")
+        description = og_desc.get("content") if og_desc else None
     return schema.product_row({
         "scraped_at": scraped_at,
         "website": SITE,
@@ -152,6 +165,8 @@ def parse_product(html, url, scraped_at):
         "compare_at_price": old_price if old_price and old_price > price else None,
         "available": available,
         "stock_qty": None,
+        "image_url": image,
+        "description": schema.plain_text(description),
         "url": url,
     })
 

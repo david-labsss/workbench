@@ -44,6 +44,27 @@ def clean(text):
     return re.sub(r"\s+", " ", (text or "").replace("\xa0", " ")).strip()
 
 
+def absolute(u):
+    """Absolute https URL for a possibly relative/protocol-relative one, else None."""
+    u = (u or "").strip()
+    if not u:
+        return None
+    if u.startswith("//"):
+        return "https:" + u
+    if u.startswith("/"):
+        return BASE + u
+    return u
+
+
+def first_image(value):
+    """First image URL from a JSON-LD "image" value (str / list / {url}), absolute, or None."""
+    if isinstance(value, list):
+        value = value[0] if value else None
+    if isinstance(value, dict):
+        value = value.get("url")
+    return absolute(value)
+
+
 def condition(url):
     """schema.org itemCondition URL -> New / Used / Refurbished."""
     for key, label in CONDITIONS.items():
@@ -115,6 +136,11 @@ def parse(pid, html):
         "price": price,
         "available": None if max_qty is None else max_qty > 0,
         "stock_qty": max_qty,
+        "image_url": first_image(product.get("image")),
+        # JSON-LD carries no description on these product pages (and the page's only
+        # description-like text just repeats the title/price), so this is usually blank; kept
+        # in case a product ever includes one.
+        "description": schema.plain_text(product.get("description")),
         "url": f"{BASE}/product/{pid}",
     })
 

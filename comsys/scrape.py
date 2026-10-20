@@ -151,6 +151,10 @@ def build_row(page_url, html, scraped_at):
     category = clean(product.get("category")) or breadcrumb_leaf(node_of(nodes, "BreadcrumbList"))
     condition_raw = str(offers.get("itemCondition") or "").rsplit("/", 1)[-1].lower()
     url = clean(offers.get("url")) or clean(product.get("url")) or page_url
+    image = product.get("image")
+    if isinstance(image, list):
+        image = image[0] if image else ""
+    image_url = clean(image) or None
     return schema.product_row({
         "scraped_at": scraped_at,
         "website": SITE,
@@ -165,6 +169,8 @@ def build_row(page_url, html, scraped_at):
         "other_specs": f"GTIN: {gtin}" if gtin else "",
         "price": to_float(offers.get("price")),
         "available": available_from(offers.get("availability")),
+        "image_url": image_url,
+        "description": schema.plain_text(product.get("description")),
         "url": url,
     })
 

@@ -37,7 +37,7 @@ PAGE = 250           # Storefront max per request
 CAP = 25000          # Shopify won't page a single listing deeper than this
 
 PRODUCT_FIELDS = """
-  id handle title vendor productType tags
+  id handle title vendor productType tags featuredImage { url } descriptionHtml
   variants(first: 100) {
     nodes { id sku price { amount } compareAtPrice { amount } availableForSale title }
   }
@@ -135,6 +135,8 @@ def build_rows(n, scraped_at):
     tags = " ".join(n.get("tags") or [])
     variants = (n.get("variants") or {}).get("nodes") or []
     parent_id = n["id"].rsplit("/", 1)[-1]
+    image_url = (n.get("featuredImage") or {}).get("url") or None
+    description = schema.plain_text(n.get("descriptionHtml"))
     multi = len(variants) > 1
     rows = []
     for v in variants:
@@ -163,6 +165,8 @@ def build_rows(n, scraped_at):
             "compare_at_price": compare if (compare and price and compare > price) else "",
             "available": "Yes" if v.get("availableForSale") else "No",
             "stock_qty": "",                         # not published by the public API
+            "image_url": image_url,
+            "description": description,
             "url": f"{BASE}/products/{handle}" + (f"?variant={vid}" if multi else ""),
         }))
     return rows

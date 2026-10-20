@@ -30,6 +30,8 @@ PRICE_OLD_RE = re.compile(r'price-old">\s*([^<]+?)\s*</span>', re.I)
 PRICE_NORM_RE = re.compile(r'price-normal">\s*([^<]+?)\s*</span>', re.I)
 DESC_MPN_RE = re.compile(r'Manufacturer Part Number:\s*([^\n<]+)', re.I)
 DESC_TYPE_RE = re.compile(r'Product Type:\s*([^\n<]+)', re.I)
+# The card's lazy-loaded thumbnail keeps the real image in data-src (src is a data: placeholder).
+IMG_RE = re.compile(r'<img[^>]+(?:data-src|src)="(https?://[^"]+)"', re.I)
 
 
 def clean(text):
@@ -74,6 +76,10 @@ def parse_card(block, scraped_at):
         price, compare = to_price(norm.group(1) if norm else ""), None
     mpn = DESC_MPN_RE.search(block)
     ptype = DESC_TYPE_RE.search(block)
+    img = IMG_RE.search(block)
+    image_url = img.group(1) if img else None
+    if image_url and "placeholder" in image_url.lower():
+        image_url = None                 # the store's "no image" placeholder, not a real photo
     return schema.product_row({
         "scraped_at": scraped_at,
         "website": SITE,
@@ -85,6 +91,10 @@ def parse_card(block, scraped_at):
         "part_number": clean(mpn.group(1)) if mpn else "",
         "price": price,
         "compare_at_price": compare if (price and compare and compare > price) else None,
+        "image_url": image_url,
+        # description lives only on the product page; the listing (all we fetch) has none, so
+        # it is left blank - fetching 57k product pages just for it would be far too slow.
+        "description": None,
         "url": url,
         # stock_qty / condition / in_stock only on the product pages, left blank on purpose
     })

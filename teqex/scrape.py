@@ -51,7 +51,8 @@ PRICE_EDGES = [0.005] + [e + 0.005 for e in (
 PRODUCT_FIELDS = (
     "uid sku name url_key url_suffix stock_status only_x_left_in_stock manufacturer "
     "price_range{minimum_price{regular_price{value} final_price{value}}} "
-    "categories{name url_path}"
+    "categories{name url_path} image{url} small_image{url} "
+    "description{html} short_description{html}"
 )
 
 CONDITIONS = [
@@ -248,6 +249,10 @@ def add_item(item, seen, scraped_at, mfr):
         "compare_at_price": regular if (final and regular and regular > final) else None,
         "available": item.get("stock_status") == "IN_STOCK",
         "stock_qty": item.get("only_x_left_in_stock"),
+        "image_url": ((item.get("image") or {}).get("url")
+                      or (item.get("small_image") or {}).get("url")) or None,
+        "description": schema.plain_text((item.get("description") or {}).get("html")
+                                         or (item.get("short_description") or {}).get("html")),
         "url": url,
     })
 

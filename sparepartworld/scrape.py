@@ -118,6 +118,12 @@ def parse_tile(tile, subcat, scraped_at):
     qty = QTY_RE.search(av_text)
     brand, part = brand_and_part(title)
     cap = CAPACITY_RE.search(title)
+    img_el = tile.select_one(".image img") or tile.select_one("img")
+    image = (img_el.get("src") or img_el.get("data-src")) if img_el else None
+    if image:
+        image = "https:" + image if image.startswith("//") else (
+            BASE + image if image.startswith("/") else image)
+    # The listing tile shows only the title (no description block), so description is None.
     return schema.product_row({
         "scraped_at": scraped_at,
         "website": SITE,
@@ -131,6 +137,8 @@ def parse_tile(tile, subcat, scraped_at):
         "price": price,
         "available": available,
         "stock_qty": float(qty.group(1)) if qty else None,
+        "image_url": image,
+        "description": None,
         "url": url,
     })
 

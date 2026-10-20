@@ -12,6 +12,7 @@ Run steps, changes and env vars: common/runner.py. Columns: common/schema.py.
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
@@ -34,6 +35,17 @@ def to_float(v):
         return float(str(v).replace(",", "").strip())
     except (TypeError, ValueError):
         return None
+
+
+def abs_image(img):
+    """First image URL from a schema.org image value (str / list / ImageObject), absolute."""
+    if isinstance(img, list):
+        img = img[0] if img else None
+    if isinstance(img, dict):
+        img = img.get("url") or img.get("contentUrl")
+    if not isinstance(img, str) or not img.strip():
+        return None
+    return urljoin(BASE, img.strip())
 
 
 def product_urls():
@@ -88,6 +100,8 @@ def build_row(url, html, scraped_at):
         "condition": condition,
         "price": price,
         "available": "instock" in avail or "limitedavailability" in avail,
+        "image_url": abs_image(ld.get("image")),
+        "description": schema.plain_text(ld.get("description")),
         "url": url,
     })
 

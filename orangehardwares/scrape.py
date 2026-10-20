@@ -67,7 +67,7 @@ PREVIOUS_COLUMNS = ["sku", "part_number", "title", "brand", "category", "conditi
                     "stock_qty", "available", "url", "scraped_at"]
 
 PRODUCT_FIELDS = """
-  id title handle vendor productType availableForSale
+  id title handle vendor productType availableForSale featuredImage { url } descriptionHtml
   variants(first: 1) { nodes { sku price { amount } compareAtPrice { amount } availableForSale } }
 """
 CAPACITY_RE = re.compile(r"\b(\d+(?:\.\d+)?)\s*(TB|GB|MB)\b", re.I)
@@ -234,6 +234,8 @@ def map_item(n, scraped_at):
         "compare_at_price": compare if compare is not None else "",
         "available": "Yes" if available else "No",
         "stock_qty": "",   # not published: quantityAvailable is access-denied on this store
+        "image_url": (n.get("featuredImage") or {}).get("url") or None,
+        "description": schema.plain_text(n.get("descriptionHtml")),
         "url": f"{BASE}/products/{n.get('handle')}",
     }
     return schema.product_row(row)
