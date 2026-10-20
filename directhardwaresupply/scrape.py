@@ -450,8 +450,9 @@ def scrape(limit, scraped_at):
     to_read = products if FETCH_ALL else [p for p in products if not hidden_backorder(p)]
     rng = random.Random()
     verify = [] if FETCH_ALL else rng.sample(hidden, min(VERIFY_HIDDEN, len(hidden)))
-    if limit:
-        to_read = to_read[:max(1, limit - limit // 3)]
+    if limit:                 # test run: products spread over the whole list, first to last
+        n = min(len(to_read), max(1, limit - limit // 3))
+        to_read = [to_read[round(i * (len(to_read) - 1) / max(1, n - 1))] for i in range(n)]
         verify = verify[:limit // 3]
     print(f"{len(products)} products: {len(to_read)} pages to read, {len(hidden)} hidden-price "
           f"backorder items saved from the feed ({len(verify)} of them read as a check)",
