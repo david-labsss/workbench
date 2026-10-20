@@ -43,4 +43,8 @@ jobs:
           QA_DB_PASSWORD: ${{ secrets.QA_DB_PASSWORD }}
           QA_SITES: ${{ inputs.sites }}
           QA_DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
-        run: python -u -m browserqa.qa
+          # A visible Chrome on a virtual screen: some bot walls turn a headless one away
+          QA_HEADFUL: "1"
+        run: |
+          command -v xvfb-run >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq xvfb)
+          xvfb-run -a python -u -m browserqa.qa

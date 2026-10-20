@@ -45,10 +45,18 @@ QUOTE_ONLY = re.compile(r"request (a )?quote|call for pric|contact (us )?for pri
                         r"ask for (a )?price|quote only", re.I)
 BLOCKED = re.compile(r"just a moment|access denied|attention required|verify you are human|forbidden", re.I)
 
-# What the page shows: its JSON-LD offers, price meta tags, and visible prices (not crossed out,
-# not in menus or other products' lists), top of the page first.
+# What the page shows: its JSON-LD offers, price meta tags, and its visible prices after the
+# product's title (<h1>), in page order, without crossed-out prices and leaving out menus and
+# other products' lists (related, recently viewed, carousels, the cart).
 READ_PAGE = """() => {
   const ld = [];
+  // An offer without a price of its own may list it in priceSpecification: the list price
+  // (crossed out on the page) and the one you pay.
+  const specPrice = (o) => {
+    const specs = [].concat(o.priceSpecification || []).filter((p) => p && p.price != null);
+    const paid = specs.filter((p) => !/ListPrice|StrikethroughPrice|MSRP/i.test(String(p.priceType || "")));
+    return (paid[0] ?? specs[0])?.price ?? null;
+  };
   for (const sc of document.querySelectorAll('script[type="application/ld+json"]')) {
     try {
       const walk = (o, sku) => {
@@ -56,7 +64,7 @@ READ_PAGE = """() => {
         if (Array.isArray(o)) return o.forEach((x) => walk(x, sku));
         const own = typeof o.sku === "string" ? o.sku : typeof o.mpn === "string" ? o.mpn : sku;
         if (o["@type"] === "Offer" || o["@type"] === "AggregateOffer")
-          ld.push({ price: o.price ?? o.lowPrice ?? null, availability: String(o.availability || ""), sku: own || "" });
+          ld.push({ price: o.price ?? o.lowPrice ?? specPrice(o), availability: String(o.availability || ""), sku: own || "" });
         Object.values(o).forEach((v) => walk(v, own));
       };
       walk(JSON.parse(sc.textContent), "");
@@ -64,19 +72,26 @@ READ_PAGE = """() => {
   }
   const meta = (n) => document.querySelector(`meta[property="${n}"],meta[name="${n}"],meta[itemprop="${n}"]`)?.content ?? null;
   const shown = (el) => { const r = el.getBoundingClientRect(); const st = getComputedStyle(el); return r.width > 0 && r.height > 0 && st.visibility !== "hidden" && st.display !== "none"; };
+  const title = document.querySelector("h1");
+  const afterTitle = (el) => !title || Boolean(title.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const crossedOut = "del, s, [class*='old' i], [class*='was' i], [class*='compare' i], [class*='regular' i]";
+  const elsewhere = "nav, header, footer, [class*='related' i], [class*='upsell' i], [class*='cross-sell' i], [class*='recent' i], " +
+    "[class*='carousel' i], [class*='slider' i], [class*='swiper' i], [class*='owl-' i], [class*='cart' i], [class*='widget' i], " +
+    "[class*='product-item' i], [class*='product-grid' i]";
   const prices = [];
   for (const el of document.querySelectorAll('[class*="price" i], [id*="price" i], [itemprop="price"]')) {
-    if (!shown(el) || el.closest("del, s, nav, header, footer, [class*='old' i], [class*='was' i], [class*='compare' i], [class*='regular' i], [class*='related' i], [class*='upsell' i], [class*='recent' i], [class*='cart' i]")) continue;
-    const text = (el.innerText || "").trim().replace(/\\s+/g, " ");
-    if (text && /\\d/.test(text) && text.length < 40) prices.push({ text, top: el.getBoundingClientRect().top + window.scrollY });
+    if (!shown(el) || !afterTitle(el) || el.closest(crossedOut) || el.closest(elsewhere)) continue;
+    const copy = el.cloneNode(true);
+    copy.querySelectorAll(crossedOut).forEach((x) => x.remove());
+    const text = (copy.textContent || "").trim().replace(/\\s+/g, " ");
+    if (text && /\\d/.test(text) && text.length < 40) prices.push(text);
   }
-  prices.sort((a, b) => a.top - b.top);
   return {
     title: document.title,
     ld,
     metaPrice: meta("product:price:amount") ?? meta("og:price:amount"),
     metaAvailability: meta("product:availability") ?? meta("og:availability"),
-    prices: prices.slice(0, 5).map((p) => p.text),
+    prices: prices.slice(0, 5),
     text: document.body.innerText.slice(0, 30000),
   };
 }"""
@@ -92,10 +107,12 @@ def amount(text):
         return None
     if isinstance(text, (int, float)):
         return float(text)
-    m = re.search(r"\d[\d.,\s  ]*", str(text))
+    # Thousands may be split by a no-break space ("1 234,56 €"), not by a plain one: in
+    # "₹19,999.00 33% off" the 33 is another number.
+    m = re.search(r"\d[\d.,  ]*", str(text))
     if not m:
         return None
-    raw = re.sub(r"[\s  ]", "", m.group(0)).rstrip(".,")
+    raw = re.sub(r"[  ]", "", m.group(0)).rstrip(".,")
     if "," in raw and "." in raw:
         raw = raw.replace(",", "") if raw.rfind(".") > raw.rfind(",") else raw.replace(".", "").replace(",", ".")
     elif "," in raw:
@@ -246,8 +263,12 @@ def main():
     sites = [s.strip() for s in (os.getenv("QA_SITES") or ",".join(SITES)).split(",") if s.strip()]
     with db.connect() as conn:
         samples = {site: sample_of(conn, site) for site in sites}
+    # QA_HEADFUL=1: a visible Chrome window (on GitHub inside xvfb), which some bot walls let
+    # through where a headless one isn't; off-screen on a desktop.
+    headful = bool(os.getenv("QA_HEADFUL"))
     with sync_playwright() as p:
-        browser = p.chromium.launch(channel=os.getenv("QA_BROWSER_CHANNEL", "chrome"), headless=True)
+        browser = p.chromium.launch(channel=os.getenv("QA_BROWSER_CHANNEL", "chrome"), headless=not headful,
+                                    args=["--window-position=-2400,-2400"] if headful else [])
         for site in sites:
             run_id, sample = samples[site]
             if not sample:
