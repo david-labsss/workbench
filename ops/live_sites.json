@@ -5,5 +5,6 @@
   "tier2": ["acmemicro", "aloinfousa", "altatechnologies", "avendor", "calhountech", "core4solutions", "datadirectglobal", "dziner", "hummingbirdnetworks", "ipcstore", "ipsecuritydepot", "ithardwarehub", "novianetworks", "officecrave", "serverbasket", "tecisoft", "tekboost", "terabitsystems", "tergumit", "thinkmate", "topparagonresource", "sabrepc", "pcnation", "vibrant", "prodisknetwork"],
   "tier34": ["renewtech", "pbtech", "serverhardware", "serverparts", "bluelink", "esus", "robertelectronics", "compridis", "xsnet", "deploydepot", "eastdigital", "epoka", "hddprime", "chert", "uptimumtech", "stor3d", "compuwyze", "senetic", "fleetnetwork", "serverflow", "avoira", "teqex", "bytestock", "insidesystems", "icit", "gekko", "ramkoenig", "serverschmiede", "naddod", "edgeoptic", "servermall", "datafox", "redcorp", "sparepartworld", "atgbics", "networkswitch", "rebootit", "stikc", "techforgood", "ckmserver"],
   "giants": ["jacob", "newtownspares", "industryelectronics", "itdevicesonline", "comsys"],
-  "builtout108": ["enterasource", "4tekgear", "screenadnote", "convergenttechnology", "happyware", "interlightus", "shopjimmy", "lttpartners", "expresscomputersystems", "ziestech", "itosolutions"]
+  "builtout108": ["enterasource", "4tekgear", "screenadnote", "convergenttechnology", "happyware", "interlightus", "shopjimmy", "lttpartners", "expresscomputersystems", "ziestech", "itosolutions"],
+  "builtout_prior": ["cpumedics", "serverflake", "serverparts4less", "wearesync"]
 }
