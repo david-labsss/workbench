@@ -30,24 +30,23 @@ LOCAL_SA = r"D:\Server Part Deals\service-account.json"             # only used 
 SHEET_ID = "16wJ7P8FmUG3DjOAZ6F9RnJDCb7FsXTqDb_eXdsc2boU"
 STATUS_COL = 18  # column R
 
-# Scrapers whose dir exists but are NOT scheduled, keyed by site dir name.
-NOT_LIVE = {
-    "gotodirect": "On hold (needs sharding)",
-    "servertechcentral": "Dropped (fake data)",
-    "eurolanditstore": "Built, not live (quote-only)",
-    "wearesync": "Built, not live",
-    "serverflake": "Built, not live (untested)",
-    "cpumedics": "Built, not live (untested)",
-    "serverparts4less": "Built, not live (untested)",
-    "techatlantix": "Blocked (Cloudflare)",
-    "ipccomputer": "Blocked",
-    "itmarket": "Blocked (paid-only)",
-    "techbuyer": "Blocked (paid-only)",
-}
-# Known blocked stores with NO scraper dir, keyed by domain.
-BLOCKED_DOMAINS = {
+# Stores with a KNOWN non-live state, keyed by DOMAIN so the status holds whether or not a scraper
+# folder happens to be present in the checkout (keeps the cloud run and local run identical).
+# Everything that isn't live and isn't listed here is "Not built yet".
+CURATED = {
+    "gotodirect.com": "On hold (needs sharding)",
+    "servertechcentral.com": "Dropped (fake data)",
+    "techbuyer.com": "Blocked (paid-only)",
+    "it-market.com": "Blocked (paid-only)",
+    "techatlantix.com": "Blocked (Cloudflare)",
     "memory4less.com": "Blocked (Cloudflare)",
     "servermonkey.com": "Blocked (Turnstile, no free path)",
+    "ipc-computer.eu": "Blocked",
+    "serverflake.com": "Built, not live (untested)",
+    "cpumedics.com": "Built, not live (untested)",
+    "serverparts4less.com": "Built, not live (untested)",
+    "eurolanditstore.co.uk": "Built, not live (quote-only)",
+    "wearesync.co.uk": "Built, not live",
 }
 # Scrapers whose target domain differs from / isn't parsed from a BASE var.
 DOMAIN_OVERRIDE = {
@@ -120,12 +119,8 @@ def main():
         key = match_key(dom)
         if key and key in LIVE:
             status = "Scraped"
-        elif key and key in NOT_LIVE:
-            status = NOT_LIVE[key]
-        elif dom in BLOCKED_DOMAINS:
-            status = BLOCKED_DOMAINS[dom]
-        elif key:
-            status = "Built, not live"
+        elif dom in CURATED:
+            status = CURATED[dom]
         else:
             status = "Not built yet"
         rows.append((i, status))
