@@ -123,5 +123,7 @@ def product_row(site, product, scraped_at, condition=""):
         "compare_at_price": regular if on_sale else None,
         "available": bool(product.get("is_in_stock")),
         "stock_qty": _stock_qty(product),
+        "image_url": (product.get("images") or [{}])[0].get("src") or None,
+        "description": schema.plain_text(product.get("short_description") or product.get("description")),
         "url": product.get("permalink") or "",
     })

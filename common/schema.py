@@ -12,12 +12,27 @@ prices: ONE table for all sites (the "website" column says which). A row per cha
 the previous full run: new product, price change, stock change, out of stock, back in stock.
 "restocked" is true when a product came back in stock (out of stock / unlisted -> in stock).
 """
+import html
+import re
+
+TAG_RE = re.compile(r"<[^>]+>")
+
+
+def plain_text(value, cap=2000):
+    """Plain text from a possibly-HTML string: unescape entities, drop tags, collapse
+    whitespace, trim to `cap` characters. Returns None when empty so the column stays blank."""
+    if not value:
+        return None
+    text = html.unescape(TAG_RE.sub(" ", str(value)))
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:cap] or None
+
 
 PRODUCT_COLUMNS = [
     "scraped_at", "website", "product_id", "parent_id", "variant_id", "sku", "part_number",
     "model_number", "title", "brand", "category", "condition", "series", "capacity", "interface", "form_factor",
     "spindle_speed", "cache", "endurance", "other_specs", "price", "compare_at_price",
-    "price_per_tb", "discount_pct", "available", "stock_qty", "url",
+    "price_per_tb", "discount_pct", "available", "stock_qty", "image_url", "description", "url",
 ]
 
 PRICE_COLUMNS = [

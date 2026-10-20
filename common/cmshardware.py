@@ -191,6 +191,9 @@ class Store:
             m = CAPACITY_RE.search(clean(p.get("name")))
             capacity = m.group(1) + m.group(2).upper() if m else ""
         price = to_float(p.get("price"))
+        images = p.get("assignedImages") or []
+        image_url = (images[0].get("image_url") or images[0].get("image")) if images else None
+        description = schema.plain_text(p.get("description") or p.get("short_description"))
         return schema.product_row({
             "scraped_at": scraped_at,
             "website": self.site,
@@ -212,6 +215,8 @@ class Store:
             "price": price or None,                  # 0 = no price shown
             "available": bool(p.get("is_in_stock")),
             "stock_qty": to_float(p.get("quantity")),
+            "image_url": image_url,
+            "description": description,
             "url": f"{self.base}/{p['url']}" if p.get("url") else "",
         })
 

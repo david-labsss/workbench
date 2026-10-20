@@ -43,7 +43,8 @@ query($first: Int!, $after: String) {
     products(first: $first, after: $after) {
       pageInfo { hasNextPage endCursor }
       edges { node {
-        entityId sku mpn name path condition
+        entityId sku mpn name path condition description
+        defaultImage { urlOriginal }
         brand { name }
         categories(first: 10) { edges { node { name path } } }
         prices { price { value } salePrice { value } retailPrice { value } basePrice { value } }
@@ -149,6 +150,8 @@ def build_rows(site, base, node, scraped_at):
     condition = (node.get("condition") or "").title() or specs.get("condition", "")
     status = (node.get("availabilityV2") or {}).get("status")
     tb = capacity_tb(specs.get("capacity") or node.get("name"))
+    image = (node.get("defaultImage") or {}).get("urlOriginal") or None
+    description = schema.plain_text(node.get("description"))
     rows = []
     for v in variants:
         options = [", ".join(x["label"] for x in edges(o.get("values")))
@@ -186,6 +189,8 @@ def build_rows(site, base, node, scraped_at):
             "price_per_tb": round(price / tb, 2) if price and tb else None,
             "available": bool(inv.get("isInStock")) and status != "Unavailable",
             "stock_qty": stock,
+            "image_url": image,
+            "description": description,
             "url": base + (node.get("path") or "/"),
         }))
     return rows
