@@ -1,4 +1,4 @@
-name: Scrape Newtown Spares
+name: Scrape NewtownSpares (giant)
 
 # Started by n8n through the GitHub API (workflow_dispatch), or by hand from the Actions tab.
 on:
@@ -20,9 +20,9 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 120
     env:
-      N8N_WEBHOOK_URL: ${{ secrets.NEW_N8N_WEBHOOK_URL }}
+      N8N_WEBHOOK_URL: ${{ secrets.GIANT_N8N_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v4
 
