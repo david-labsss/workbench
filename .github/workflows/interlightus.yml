@@ -23,7 +23,8 @@ jobs:
   scrape:
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || github.repository_owner == 'Aaron-labbss'
-    timeout-minutes: 90
+    # 167k products over BigCommerce GraphQL, slowed by connection-reset retries; 90m wasn't enough.
+    timeout-minutes: 300
     env:
       N8N_WEBHOOK_URL: ${{ secrets.NEW_N8N_WEBHOOK_URL }}
     steps:
