@@ -231,8 +231,10 @@ def add_item(item, seen, scraped_at, mfr):
     regular = money((prices.get("regular_price") or {}).get("value"))
     sku = item.get("sku") or ""
     brand = mfr.get(str(item.get("manufacturer"))) if item.get("manufacturer") is not None else ""
-    url_key = item.get("url_key") or ""
-    url = f"{BASE}/{url_key}{item.get('url_suffix') or ''}" if url_key else BASE
+    # The storefront's SEO rewrites for url_key are mostly stale (BASE/{url_key}.html 404s for
+    # ~all products), so save Magento's canonical id route, which always resolves (and 301s to the
+    # SEO URL when a valid rewrite exists). pid is the decoded entity id.
+    url = f"{BASE}/catalog/product/view/id/{pid}"
     seen[pid] = schema.product_row({
         "scraped_at": scraped_at,
         "website": SITE,

@@ -9,8 +9,10 @@ trailing slash) is read a few at a time. Each product page is server-rendered:
     even when the item is out of stock;
   * the store's product number (.product-detail-ordernumber) is the id, and also the last URL
     segment;
-  * the title is .product-detail-name and availability is .delivery-information
-    ("No longer available" -> out of stock);
+  * the title is .product-detail-name; availability and stock come from the buy box - an
+    in-stock item shows a positive .product-detail-stock count ("Stock: N") and a
+    .delivery-available message, a sold-out one shows .delivery-soldout ("No longer available")
+    and no stock count;
   * a Product JSON-LD block, when present, adds the brand and the manufacturer part number.
 
 Run steps, changes and env vars: common/runner.py. Columns: common/schema.py.
@@ -107,7 +109,18 @@ def build_row(url, html, scraped_at):
     offer = offers[0] if isinstance(offers, list) and offers else offers
     cond = str((offer or {}).get("itemCondition") or "").lower()
 
-    available = bool(delivery_text) and not any(p in delivery_text.lower() for p in NOT_AVAILABLE)
+    # Stock count from the buy box (<span class="product-detail-stock">N</span>, inside
+    # .product-detail-stock-container). In-stock products always show a positive number; sold-out
+    # products ("No longer available", .delivery-soldout) have no stock element at all.
+    stock_el = soup.select_one(".product-detail-stock")
+    stock_qty = None
+    if stock_el:
+        m = re.search(r"\d+", stock_el.get_text())
+        stock_qty = int(m.group()) if m else None
+    soldout = (soup.select_one(".delivery-soldout") is not None
+               or any(p in delivery_text.lower() for p in NOT_AVAILABLE))
+    # Availability follows the stock count when the page shows one, else the delivery state.
+    available = (stock_qty > 0) if stock_qty is not None else (bool(delivery_text) and not soldout)
     return schema.product_row({
         "scraped_at": scraped_at, "website": SITE,
         "product_id": product_id, "sku": product_id,
@@ -116,6 +129,7 @@ def build_row(url, html, scraped_at):
         "condition": next((v for k, v in CONDITIONS.items() if k in cond), ""),
         "price": price,
         "available": available,
+        "stock_qty": stock_qty,
         "other_specs": delivery_text,
         "image_url": _meta(soup, property="og:image") or None,  # absolute img.ram-koenig.de URL
         "description": None,  # product pages expose no description (JSON-LD/og/meta all empty)

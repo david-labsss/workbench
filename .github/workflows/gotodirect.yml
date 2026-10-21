@@ -1,0 +1,49 @@
+name: Scrape Gotodirect
+
+# gotodirect.com is ~977k scoped products and origin-throttled to ~2 pages/s, so one process is
+# 11-13h (over GitHub's 6h cap). We fetch it as 6 page-level shards in parallel (SHARD_COUNT=6,
+# SHARD_INDEX = the matrix value); each shard runs with MAX_PRODUCTS huge so common/runner marks it
+# full_run=false and just appends its slice (no change-tracking, no completeness abort per shard).
+# Weekly, because a full refresh is ~977k rows. The cron runs on ONE account; workflow_dispatch
+# works on any.
+on:
+  schedule:
+    - cron: "0 2 * * 0"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "1 = print sample rows only, don't save to the database"
+        required: false
+        default: "0"
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.repository_owner == 'Aaron-labbss'
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
+    concurrency:
+      group: scrape-gotodirect-${{ matrix.shard }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scraper (shard ${{ matrix.shard }} of 6)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          SHARD_COUNT: "6"
+          SHARD_INDEX: ${{ matrix.shard }}
+          MAX_PRODUCTS: "99999999"
+        run: python -u -m gotodirect.scrape
