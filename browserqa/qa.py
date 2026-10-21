@@ -45,6 +45,10 @@ MISMATCHES = ("price", "stock", "price+stock")
 # round a converted price a unit apart.
 OTHER_CURRENCY = {"avoira", "uptimumtech", "pbtech"}
 CURRENCY_ROUNDING = 0.002
+# Stores whose dollar prices are converted from their own currency at each day's rate and rounded
+# to whole dollars (insidesystems, from Danish krone): a day's rate move shifts them a dollar or so.
+DAILY_RATE = {"insidesystems"}
+DAILY_RATE_MOVE = 0.005
 QUOTE_ONLY = re.compile(r"request (a )?quote|call for pric|contact (us )?for pric|price on request|get a quote|"
                         r"ask for (a )?price|quote only", re.I)
 # Stores whose product pages are cached in whatever currency their first visitor was shown
@@ -265,10 +269,10 @@ def store_api_product(page, base, row):
     return {"price": price, "available": product.get("is_in_stock"), "from": "Store API"}
 
 
-def compare(row, live, tolerance):
+def compare(row, live, tolerance, unit=0.01):
     saved = float(row["price"]) if row["price"] else None
     now = live["price"] or None
-    price_ok = saved == now if saved is None or now is None else abs(saved - now) <= max(0.01, saved * tolerance)
+    price_ok = saved == now if saved is None or now is None else abs(saved - now) <= max(unit, saved * tolerance)
     stock_ok = row["available"] is None or live["available"] is None or row["available"] == live["available"]
     if price_ok and stock_ok:
         return "match"
@@ -308,7 +312,8 @@ def sample_of(conn, site):
 
 
 def check_site(browser, site, run_id, sample):
-    tolerance = CURRENCY_ROUNDING if site in OTHER_CURRENCY else 0
+    tolerance = CURRENCY_ROUNDING if site in OTHER_CURRENCY else DAILY_RATE_MOVE if site in DAILY_RATE else 0
+    unit = 1.0 if site in DAILY_RATE else 0.01
     context = browser.new_context(locale="en-US", viewport={"width": 1366, "height": 1000})
     page = context.new_page()
     if site in USD_SWITCH:
@@ -318,7 +323,7 @@ def check_site(browser, site, run_id, sample):
         live, note = None, None
         try:
             live = store_api_product(page, STORE_API[site], row) if site in STORE_API else live_product(page, row, site)
-            result = compare(row, live, tolerance)
+            result = compare(row, live, tolerance, unit)
         except Unclear as e:
             result, note = "unclear", str(e)
         except Exception as e:  # noqa: BLE001 - a store error is a result, not a crash
