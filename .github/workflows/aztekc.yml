@@ -9,6 +9,7 @@ name: Scrape Aztek Computers
 on:
   schedule:
     - cron: "0 12 * * 0"          # Sundays 12:00 UTC: weekly real-stock reconciliation (FULL)
+    - cron: "0 23 * * *"          # daily 23:00 UTC: light price pass (real stock carried forward)
   workflow_dispatch:
     inputs:
       max_products:
@@ -54,7 +55,7 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
           # FULL (real-stock) pass on the weekly cron, or when a manual run asks for it; otherwise
           # the daily light pass that carries stock forward.
-          AZ_FULL: ${{ (github.event_name == 'schedule' || inputs.full == '1') && '1' || '' }}
+          AZ_FULL: ${{ (github.event.schedule == '0 12 * * 0' || inputs.full == '1') && '1' || '' }}
           AZ_WORKERS: "12"
         run: python -u -m aztekc.scrape
 

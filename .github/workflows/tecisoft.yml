@@ -2,6 +2,8 @@ name: Scrape Tecisoft
 
 # Started by n8n through the GitHub API (workflow_dispatch), or by hand from the Actions tab.
 on:
+  schedule:
+    - cron: "3 6 * * *"
   workflow_dispatch:
     inputs:
       max_products:
@@ -20,6 +22,7 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.repository_owner == 'Adam-labbss'
     timeout-minutes: 90
     env:
       N8N_WEBHOOK_URL: ${{ secrets.TIER2_N8N_WEBHOOK_URL }}
