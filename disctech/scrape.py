@@ -99,13 +99,19 @@ def to_float(v):
 
 
 def first_image(item):
-    """The main product image url (absolute). itemimages_detail is {group: {urls: [{url}]}}."""
-    detail = item.get("itemimages_detail") or {}
-    for group in detail.values():
-        for u in (group or {}).get("urls") or []:
-            if u.get("url"):
-                return u["url"]
-    return None
+    """The main product image url (absolute). itemimages_detail is usually {group: {urls: [{url}]}},
+    but a group can also be a list of such entries (a run crashed on one on 2026-10-21), so the
+    first "url" is found whatever the nesting."""
+    def urls(node):
+        if isinstance(node, dict):
+            if isinstance(node.get("url"), str) and node["url"]:
+                yield node["url"]
+            for v in node.values():
+                yield from urls(v)
+        elif isinstance(node, list):
+            for v in node:
+                yield from urls(v)
+    return next(urls(item.get("itemimages_detail") or {}), None)
 
 
 def build_row(item, scraped_at):
