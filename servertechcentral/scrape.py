@@ -69,6 +69,11 @@ from bs4 import BeautifulSoup
 
 from common import db, http, runner, schema
 
+try:
+    from curl_cffi import requests as cffi   # clears Cloudflare's passive bot check from runner IPs
+except ImportError:
+    cffi = None
+
 SITE = "servertechcentral"
 BASE = "https://servertechcentral.com"
 SITEMAP = BASE + "/sitemap.xml"
@@ -98,8 +103,15 @@ CONDITION_RE = re.compile(r"\b(refurbished|recertified|renewed|open[- ]box|used|
 
 
 # --- sitemap -----------------------------------------------------------------
+def _fetch(url, timeout):
+    """Cloudflare 403s plain requests from datacenter IPs; curl_cffi impersonates Chrome's TLS."""
+    if cffi is not None:
+        return cffi.get(url, timeout=timeout, impersonate="chrome")
+    return http.session().get(url, timeout=timeout)
+
+
 def _get(url, timeout=120):
-    r = http.session().get(url, timeout=timeout)
+    r = _fetch(url, timeout)
     r.raise_for_status()
     return r.text
 
@@ -159,7 +171,7 @@ def parts_listed():
 def fetch(slug):
     url = f"{BASE}/product/{slug}"
     try:
-        r = http.session().get(url, timeout=45)
+        r = _fetch(url, 45)
         if r.status_code == 404:
             return slug, None
         r.raise_for_status()
