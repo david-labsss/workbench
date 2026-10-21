@@ -107,6 +107,8 @@ READ_PAGE = """() => {
     title: document.title,
     ld,
     metaPrice: meta("product:price:amount") ?? meta("og:price:amount"),
+    // schema.org microdata: <span itemprop="price" content="199.95">
+    microPrice: (() => { const el = document.querySelector('[itemprop="price"]'); return el ? el.getAttribute("content") || el.textContent : null; })(),
     metaAvailability: meta("product:availability") ?? meta("og:availability"),
     prices: prices.slice(0, 5),
     // Magento's price box (USD_SWITCH stores)
@@ -225,15 +227,19 @@ def live_product(page, row, site):
         if offer["currency"] not in ("", "USD") and site not in OTHER_CURRENCY:
             raise RuntimeError(f"the page's data is in {offer['currency']}, not US dollars")
         price, source = amount(offer["price"]), f"JSON-LD {offer['price']}"
-    else:
+    elif seen["metaPrice"] is not None:
         price, source = amount(seen["metaPrice"]), f"meta {seen['metaPrice']}"
+    else:
+        price, source = amount(seen["microPrice"]), f"microdata {seen['microPrice']}"
     if price is None and len(offers) > 1:
         raise Unclear("the page lists several prices")
     if price is None:
         shown = next((p for p in seen["prices"] if amount(p)), None)
         price, source = amount(shown), f"shown {shown!r}"
     if price is None and (row["price"] or availability is None):
-        raise Unclear(f"no price on the page ({status}: {seen['title'][:50]})")
+        near = re.search(r".{0,40}price.{0,40}", seen["text"], re.I | re.S)
+        raise Unclear(f"no price on the page ({status}: {seen['title'][:50]}; "
+                      f"{' '.join(near.group(0).split()) if near else 'no price wording'})")
     return {"price": price, "available": availability, "from": source}
 
 

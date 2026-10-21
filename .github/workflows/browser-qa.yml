@@ -18,6 +18,10 @@ on:
         description: "Only print the results (don't log them for the dashboard)"
         type: boolean
         default: false
+      sample:
+        description: "Products per site (blank = 25; fewer only for trying it out)"
+        required: false
+        default: ""
 
 jobs:
   qa:
@@ -43,6 +47,7 @@ jobs:
           QA_DB_PASSWORD: ${{ secrets.QA_DB_PASSWORD }}
           QA_SITES: ${{ inputs.sites }}
           QA_DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+          QA_SAMPLE: ${{ inputs.sample }}
           # A visible Chrome on a virtual screen: some bot walls turn a headless one away
           QA_HEADFUL: "1"
         run: |
