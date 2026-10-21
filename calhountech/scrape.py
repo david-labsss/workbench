@@ -30,6 +30,8 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import requests
+
 from common import bigcommerce as bc, http, runner, schema
 
 SITE = "calhountech"
@@ -39,6 +41,8 @@ CAP = 10000                   # a search's result cap; windows must stay under i
 WORKERS = 3                   # windows paged at the same time
 PAGE_DELAY = 0.3              # pause between pages of one window
 COUNT_DELAY = 0.3             # pause between window-count probes
+TRIES = 3                     # attempts per GraphQL request when the response is cut off or times out
+RETRY_PAUSE = 20
 # First window boundaries, in cents (a window is lo <= price*100 < hi; None = no upper end).
 # Halved further each run wherever a window holds CAP or more products.
 SEEDS = [1, 2500, 6250, 10000, 12500, 15000, 17500, 20000, 25000, 50000, 100000, None]
@@ -89,11 +93,23 @@ def bounds(lo, hi):
 
 
 def search(hdrs, query, variables):
-    """One searchProducts page. A failed page raises: it must never look like the end."""
-    r = http.session().post(BASE + "/graphql", headers=hdrs, timeout=120,
-                            json={"query": query, "variables": variables})
-    r.raise_for_status()
-    data = r.json()
+    """One searchProducts page. A failed page raises: it must never look like the end. A
+    response the server cuts off part-way is tried again a few times first (requests does not
+    retry those; one ended the run on 2026-10-21)."""
+    for attempt in range(1, TRIES + 1):
+        try:
+            r = http.session().post(BASE + "/graphql", headers=hdrs, timeout=120,
+                                    json={"query": query, "variables": variables})
+            r.raise_for_status()
+            data = r.json()
+            break
+        except (requests.ConnectionError, requests.Timeout,
+                requests.exceptions.ChunkedEncodingError) as e:
+            if attempt == TRIES:
+                raise
+            print(f"WARN GraphQL request: {e.__class__.__name__}, retrying in {RETRY_PAUSE}s",
+                  flush=True)
+            time.sleep(RETRY_PAUSE)
     if data.get("errors"):
         raise RuntimeError(f"GraphQL error: {data['errors'][0].get('message')}")
     return data["data"]["site"]["search"]["searchProducts"]["products"]

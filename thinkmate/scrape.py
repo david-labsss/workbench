@@ -103,6 +103,10 @@ def price_of(box):
     return value or None                    # $0 = no real price
 
 
+class NoTitle(RuntimeError):
+    """A product page without a title: a bad response, or the page layout changed."""
+
+
 def parse(url, html, scraped_at):
     soup = BeautifulSoup(html, "html.parser")
     url_brand, url_mpn = PRODUCT_URL_RE.match(url).groups()
@@ -112,7 +116,7 @@ def parse(url, html, scraped_at):
     if crumbs_ld and (not title or "�" in title):     # the LD copy keeps symbols like (TM)
         title = crumbs_ld[-1]
     if not title:
-        raise RuntimeError(f"{url}: no product title (page layout changed?)")
+        raise NoTitle(f"{url}: no product title (page layout changed?)")
 
     brand, mpn = "", ""
     for h2 in soup.select("h2"):
@@ -185,8 +189,19 @@ def scrape(limit, scraped_at):
     print(f"sitemap lists {len(urls)} component products", flush=True)
     rows = []
     for i, url in enumerate(urls[:limit] if limit else urls, 1):
-        r = get(url)                        # a failed page raises (after http's retries)
-        rows.append(parse(url, r.content, scraped_at))
+        # A failed page raises (after http's retries). A page without a title is read again a
+        # few times first: on 2026-10-21 one came back without it, and loaded fine minutes later.
+        for attempt in range(1, TRIES + 1):
+            r = get(url)
+            try:
+                rows.append(parse(url, r.content, scraped_at))
+                break
+            except NoTitle:
+                if attempt == TRIES:
+                    raise
+                print(f"WARN {url}: no title on the page, reading it again in {RETRY_PAUSE}s",
+                      flush=True)
+                time.sleep(RETRY_PAUSE)
         if i % 10 == 0:
             print(f"{i} pages", flush=True)
         time.sleep(DELAY)
