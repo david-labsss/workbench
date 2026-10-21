@@ -117,7 +117,9 @@ READ_PAGE = """() => {
     prices: prices.slice(0, 5),
     // Magento's price box (USD_SWITCH stores)
     boxPrice: document.querySelector("[id^='product-price-'] .price")?.textContent?.trim() ?? null,
-    text: document.body.innerText.slice(0, 30000),
+    // From the product's title on: menus above it can say "Request a quote" or "In stock" for anything
+    text: (() => { const t = document.body.innerText; const i = title ? t.indexOf(title.innerText.trim()) : -1;
+      return t.slice(Math.max(i, 0), Math.max(i, 0) + 30000); })(),
   };
 }"""
 
