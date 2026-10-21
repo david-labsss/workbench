@@ -157,6 +157,10 @@ def in_stock(value):
     return None
 
 
+STOCK_WORDING = re.compile(r".{0,50}(out of stock|in stock|sold out|unavailable|back ?order|pre-?order|ships? (in|within|today)|"
+                           r"deliver|pick ?up).{0,50}", re.I | re.S)
+
+
 def key(v):
     return (v or "").strip().upper()
 
@@ -223,6 +227,8 @@ def live_product(page, row, site):
     if not row["price"] and QUOTE_ONLY.search(seen["text"]):
         return {"price": None, "available": None, "from": "asks for a quote"}
     # Where the price was read, for the log: a mismatch can then be told from a misread page
+    wording = STOCK_WORDING.search(seen["text"])
+    stock_note = f"; stock from {'data' if availability is not None else '-'}, page says {' '.join(wording.group(0).split())!r}" if wording else ""
     if offer:
         if offer["currency"] not in ("", "USD") and site not in OTHER_CURRENCY:
             raise RuntimeError(f"the page's data is in {offer['currency']}, not US dollars")
@@ -240,7 +246,7 @@ def live_product(page, row, site):
         near = re.search(r".{0,40}price.{0,40}", seen["text"], re.I | re.S)
         raise Unclear(f"no price on the page ({status}: {seen['title'][:50]}; "
                       f"{' '.join(near.group(0).split()) if near else 'no price wording'})")
-    return {"price": price, "available": availability, "from": source}
+    return {"price": price, "available": availability, "from": source + stock_note}
 
 
 def store_api_product(page, base, row):
