@@ -2,7 +2,10 @@
 refurbished storage and server parts): every run's full snapshot appended to Postgres.
 
 Prices are in DKK (Danish krone), delivered by the Store API in minor units (øre) and converted
-by common/woocommerce.py. The product SKU is the manufacturer part number, so it fills
+by common/woocommerce.py. The store's YayCurrency plugin otherwise auto-switches currency by the
+visitor's country (a US runner would get USD at that day's FX rate, so prices would wobble by a
+dollar every run), so we pin DKK on every request with the `yay-currency=DKK` query param. The
+product SKU is the manufacturer part number, so it fills
 part_number too. The brands taxonomy is empty; a "Brand"/"Condition" product attribute (when a
 product has one) is read from the Store API attributes list, and any other attribute goes to
 other_specs. Run steps, changes and env vars: common/runner.py. Columns: common/schema.py.
@@ -39,7 +42,7 @@ def build_row(product, scraped_at):
 
 
 def scrape(limit, scraped_at):
-    products, listed = woo.fetch_products(BASE, limit)
+    products, listed = woo.fetch_products(BASE, limit, params={"yay-currency": "DKK"})
     rows = [build_row(p, scraped_at) for p in products]
     return rows, listed
 
