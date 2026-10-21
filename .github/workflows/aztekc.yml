@@ -1,7 +1,14 @@
 name: Scrape Aztek Computers
 
-# Started by n8n through the GitHub API (workflow_dispatch), or by hand from the Actions tab.
+# Two cadences, one scraper (see aztekc/scrape.py):
+#  * daily  (n8n workflow_dispatch): walk listings for price; carry real stock forward from the
+#            last full run. Fast, light.
+#  * weekly (schedule, FULL pass): also fetch every product page to read real availability from its
+#            JSON-LD. Heavy (~141k pages), so once a week. The single-account guard keeps the cron
+#            from firing on all five mirror repos; manual dispatch still works anywhere.
 on:
+  schedule:
+    - cron: "0 4 * * 0"          # Sundays 04:00 UTC: weekly real-stock reconciliation (FULL)
   workflow_dispatch:
     inputs:
       max_products:
@@ -12,6 +19,10 @@ on:
         description: "1 = print sample rows only, don't save to the database"
         required: false
         default: "0"
+      full:
+        description: "1 = FULL pass (read real availability from every product page). Blank/0 = daily light pass."
+        required: false
+        default: "0"
 
 concurrency:
   group: scrape-aztekc
@@ -20,7 +31,8 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    if: github.event_name == 'workflow_dispatch' || github.repository_owner == 'Aaron-labbss'
+    timeout-minutes: 330
     env:
       N8N_WEBHOOK_URL: ${{ secrets.NEW_N8N_WEBHOOK_URL }}
     steps:
@@ -40,6 +52,10 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           MAX_PRODUCTS: ${{ inputs.max_products }}
           DRY_RUN: ${{ inputs.dry_run }}
+          # FULL (real-stock) pass on the weekly cron, or when a manual run asks for it; otherwise
+          # the daily light pass that carries stock forward.
+          AZ_FULL: ${{ (github.event_name == 'schedule' || inputs.full == '1') && '1' || '' }}
+          AZ_WORKERS: "12"
         run: python -u -m aztekc.scrape
 
       - name: Report result to n8n
