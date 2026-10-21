@@ -49,6 +49,12 @@ QUOTE_ONLY = re.compile(r"request (a )?quote|call for pric|contact (us )?for pri
 # (insidesystems shows each country its own): their price and stock come from their WooCommerce
 # Store API instead, which answers in the visitor's currency - US dollars here, as their scraper reads it.
 STORE_API = {"insidesystems": "https://insidesystems.com"}
+# Stores that show euros to everyone until the visitor picks US dollars in the header, as their
+# scrapers do (Magento + Hyva: its "USD - US Dollar" button posts this form). Their visible price
+# box is what the scraper saves: the page's data keeps a price the box hides ("Get in touch").
+USD_SWITCH = {"directhardwaresupply": "https://directhardwaresupply.com/"}
+SWITCH_FORM = re.compile(r'hyva\.postForm\((\{"action":"[^"]*currency\\/switch\\/","data":\{"currency":"USD"[^}]*\}\})\)')
+PAGE_CURRENCY = re.compile(r"style:\s*'currency',\s*currency:\s*'([A-Z]{3})'")
 BLOCKED = re.compile(r"just a moment|access denied|attention required|verify you are human|forbidden", re.I)
 # A bot check that lets a real browser through by itself after a few seconds (Cloudflare's "Just a moment...")
 CHECKING = "() => !/just a moment|verify you are human|attention required/i.test(document.title)"
@@ -72,7 +78,8 @@ READ_PAGE = """() => {
         if (Array.isArray(o)) return o.forEach((x) => walk(x, sku));
         const own = typeof o.sku === "string" ? o.sku : typeof o.mpn === "string" ? o.mpn : sku;
         if (o["@type"] === "Offer" || o["@type"] === "AggregateOffer")
-          ld.push({ price: o.price ?? o.lowPrice ?? specPrice(o), availability: String(o.availability || ""), sku: own || "" });
+          ld.push({ price: o.price ?? o.lowPrice ?? specPrice(o), availability: String(o.availability || ""), sku: own || "",
+                   currency: String(o.priceCurrency || "") });
         Object.values(o).forEach((v) => walk(v, own));
       };
       walk(JSON.parse(sc.textContent), "");
@@ -100,6 +107,8 @@ READ_PAGE = """() => {
     metaPrice: meta("product:price:amount") ?? meta("og:price:amount"),
     metaAvailability: meta("product:availability") ?? meta("og:availability"),
     prices: prices.slice(0, 5),
+    // Magento's price box (USD_SWITCH stores)
+    boxPrice: document.querySelector("[id^='product-price-'] .price")?.textContent?.trim() ?? null,
     text: document.body.innerText.slice(0, 30000),
   };
 }"""
@@ -148,7 +157,24 @@ def key(v):
     return (v or "").strip().upper()
 
 
-def live_product(page, row):
+def switch_to_usd(page, home):
+    """Pick US dollars in the store's header, as its scraper does: the choice stays in the session."""
+    page.goto(home, wait_until="domcontentloaded", timeout=60_000)
+    shown_in = PAGE_CURRENCY.search(page.content())
+    if shown_in and shown_in.group(1) == "USD":
+        return
+    form = SWITCH_FORM.search(page.content())
+    if not form:
+        raise RuntimeError(f"{home}: no 'USD - US Dollar' switch")
+    with page.expect_navigation(timeout=60_000):
+        page.evaluate(f"hyva.postForm({form.group(1)})")
+    page.goto(home, wait_until="domcontentloaded", timeout=60_000)
+    shown_in = PAGE_CURRENCY.search(page.content())
+    if not shown_in or shown_in.group(1) != "USD":
+        raise RuntimeError(f"switching to US dollars failed: the store shows {shown_in.group(1) if shown_in else '?'}")
+
+
+def live_product(page, row, site):
     """The product as its page shows it now, to a buyer in the US."""
     if not (row["url"] or "").startswith("http"):
         raise Unclear("no product page")
@@ -180,12 +206,19 @@ def live_product(page, row):
         availability = in_stock(seen["metaAvailability"])
     if availability is None:
         availability = next((in_stock(o["availability"]) for o in seen["ld"] if in_stock(o["availability"]) is not None), None)
+    if site in USD_SWITCH:
+        shown_in = PAGE_CURRENCY.search(page.content())
+        if not shown_in or shown_in.group(1) != "USD":
+            raise RuntimeError(f"the page shows {shown_in.group(1) if shown_in else '?'}, not US dollars")
+        return {"price": amount(seen["boxPrice"]), "available": availability, "from": f"price box {seen['boxPrice']!r}"}
     # A product saved without a price whose page asks for a quote: the price and stock in the
     # page's data are ones the store hides ("Contact for pricing / availability").
     if not row["price"] and QUOTE_ONLY.search(seen["text"]):
         return {"price": None, "available": None, "from": "asks for a quote"}
     # Where the price was read, for the log: a mismatch can then be told from a misread page
     if offer:
+        if offer["currency"] not in ("", "USD") and site not in OTHER_CURRENCY:
+            raise RuntimeError(f"the page's data is in {offer['currency']}, not US dollars")
         price, source = amount(offer["price"]), f"JSON-LD {offer['price']}"
     else:
         price, source = amount(seen["metaPrice"]), f"meta {seen['metaPrice']}"
@@ -261,11 +294,13 @@ def check_site(browser, site, run_id, sample):
     tolerance = CURRENCY_ROUNDING if site in OTHER_CURRENCY else 0
     context = browser.new_context(locale="en-US", viewport={"width": 1366, "height": 1000})
     page = context.new_page()
+    if site in USD_SWITCH:
+        switch_to_usd(page, USD_SWITCH[site])
     checks = []
     for row in sample:
         live, note = None, None
         try:
-            live = store_api_product(page, STORE_API[site], row) if site in STORE_API else live_product(page, row)
+            live = store_api_product(page, STORE_API[site], row) if site in STORE_API else live_product(page, row, site)
             result = compare(row, live, tolerance)
         except Unclear as e:
             result, note = "unclear", str(e)
