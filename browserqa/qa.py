@@ -2,7 +2,7 @@
 
 The dashboard (server-scrapers-ui, Vercel Cron, Frankfurt) re-fetches 25 random products of each
 site's newest run and compares them with what was saved. Some sites it can't judge from there:
-stores that show buyers outside the US other prices or stock (naddod, staples), stores whose bot
+stores that show buyers outside the US other prices or stock (naddod, staples, directhardwaresupply), stores whose bot
 wall turns servers away (avoira, serverbasket, directdial, insidesystems), and pages that draw
 their price with JavaScript (hddprime, uptimumtech, stor3d). Here each product page is opened in Chrome from the US, like
 their scrapers, and read as a buyer sees it.
@@ -32,7 +32,9 @@ from playwright.sync_api import sync_playwright
 
 from common import db
 
-SITES = ["naddod", "staples", "avoira", "serverbasket", "hddprime", "uptimumtech", "stor3d", "directdial", "insidesystems"]
+# The dashboard's daily QA leaves these out (NO_LIVE_CHECK in its src/app/api/qa/run/route.ts): keep the two lists alike.
+SITES = ["naddod", "staples", "avoira", "serverbasket", "hddprime", "uptimumtech", "stor3d", "directdial", "insidesystems",
+         "directhardwaresupply"]
 SAMPLE = int(os.getenv("QA_SAMPLE") or 25)  # fewer only for trying it out
 MAX_MISMATCH = 0.1
 MIN_CHECKED = 10
