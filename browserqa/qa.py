@@ -11,7 +11,7 @@ The same rules as the dashboard's QA (src/lib/qa.ts there):
   - 25 random products of the site's newest saved full run
   - the price: the page's JSON-LD offer (the one with the product's SKU, if it lists several),
     else its price meta tags, else its first visible price; a product saved without a price
-    whose page asks for a quote matches
+    whose page asks for a quote matches (insidesystems: its Store API, see STORE_API)
   - prices to the cent; stores priced in another currency within 0.2% (conversion rounding)
   - stock only when both sides know it (the page's JSON-LD or meta availability)
   - passes when at most 1 in 10 of the products it could check differ
@@ -43,7 +43,13 @@ OTHER_CURRENCY = {"avoira", "uptimumtech"}
 CURRENCY_ROUNDING = 0.002
 QUOTE_ONLY = re.compile(r"request (a )?quote|call for pric|contact (us )?for pric|price on request|get a quote|"
                         r"ask for (a )?price|quote only", re.I)
+# Stores whose product pages are cached in whatever currency their first visitor was shown
+# (insidesystems shows each country its own): their price and stock come from their WooCommerce
+# Store API instead, which answers in the visitor's currency - US dollars here, as their scraper reads it.
+STORE_API = {"insidesystems": "https://insidesystems.com"}
 BLOCKED = re.compile(r"just a moment|access denied|attention required|verify you are human|forbidden", re.I)
+# A bot check that lets a real browser through by itself after a few seconds (Cloudflare's "Just a moment...")
+CHECKING = "() => !/just a moment|verify you are human|attention required/i.test(document.title)"
 
 # What the page shows: its JSON-LD offers, price meta tags, and its visible prices after the
 # product's title (<h1>), in page order, without crossed-out prices and leaving out menus and
@@ -147,15 +153,22 @@ def live_product(page, row):
     response = page.goto(row["url"], wait_until="domcontentloaded", timeout=60_000)
     if response and response.status in (404, 410):
         raise Unclear(f"page gone ({response.status})")
+    status = response.status if response else None
+    try:
+        page.wait_for_function(CHECKING, timeout=30_000)
+    except Exception:  # noqa: BLE001 - still checking: blocked, below
+        pass
     try:
         page.wait_for_load_state("networkidle", timeout=15_000)
     except Exception:  # noqa: BLE001 - pages that keep polling: read them as they are
         pass
     seen = page.evaluate(READ_PAGE)
-    if BLOCKED.search(seen["title"] or "") or (response and response.status in (403, 429)):
-        raise RuntimeError(f"blocked ({response.status if response else '?'}: {seen['title'][:60]})")
-    if response and response.status >= 500:
-        raise RuntimeError(f"HTTP {response.status}")
+    if status == 403 and not BLOCKED.search(seen["title"] or ""):
+        status = 200  # the bot check let us through and loaded the page
+    if BLOCKED.search(seen["title"] or "") or status in (403, 429):
+        raise RuntimeError(f"blocked ({status or '?'}: {seen['title'][:60]})")
+    if status and status >= 500:
+        raise RuntimeError(f"HTTP {status}")
 
     offers = [o for o in seen["ld"] if amount(o["price"]) is not None]
     mine = [o for o in offers if key(o["sku"]) and key(o["sku"]) in (key(row["sku"]), key(row["part_number"]))]
@@ -168,15 +181,36 @@ def live_product(page, row):
     # A product saved without a price whose page asks for a quote: the price and stock in the
     # page's data are ones the store hides ("Contact for pricing / availability").
     if not row["price"] and QUOTE_ONLY.search(seen["text"]):
-        return {"price": None, "available": None}
-    price = amount(offer["price"]) if offer else amount(seen["metaPrice"])
+        return {"price": None, "available": None, "from": "asks for a quote"}
+    # Where the price was read, for the log: a mismatch can then be told from a misread page
+    if offer:
+        price, source = amount(offer["price"]), f"JSON-LD {offer['price']}"
+    else:
+        price, source = amount(seen["metaPrice"]), f"meta {seen['metaPrice']}"
     if price is None and len(offers) > 1:
         raise Unclear("the page lists several prices")
     if price is None:
-        price = next((amount(p) for p in seen["prices"] if amount(p)), None)
+        shown = next((p for p in seen["prices"] if amount(p)), None)
+        price, source = amount(shown), f"shown {shown!r}"
     if price is None and (row["price"] or availability is None):
         raise Unclear("no price on the page")
-    return {"price": price, "available": availability}
+    return {"price": price, "available": availability, "from": source}
+
+
+def store_api_product(page, base, row):
+    """The product as the store's WooCommerce Store API gives it now, to a buyer in the US."""
+    response = page.request.get(f"{base}/wp-json/wc/store/v1/products/{row['product_id']}", timeout=60_000)
+    if response.status == 404:
+        raise Unclear("product gone (404)")
+    if response.status != 200:
+        raise RuntimeError(f"HTTP {response.status}")
+    product = response.json()
+    prices = product.get("prices") or {}
+    if prices.get("currency_code") != "USD":
+        raise Unclear(f"the store answered in {prices.get('currency_code')}")
+    raw = prices.get("price")
+    price = int(raw) / 10 ** int(prices.get("currency_minor_unit") or 0) if raw and raw != "0" else None
+    return {"price": price, "available": product.get("is_in_stock"), "from": "Store API"}
 
 
 def compare(row, live, tolerance):
@@ -229,7 +263,7 @@ def check_site(browser, site, run_id, sample):
     for row in sample:
         live, note = None, None
         try:
-            live = live_product(page, row)
+            live = store_api_product(page, STORE_API[site], row) if site in STORE_API else live_product(page, row)
             result = compare(row, live, tolerance)
         except Unclear as e:
             result, note = "unclear", str(e)
@@ -237,6 +271,8 @@ def check_site(browser, site, run_id, sample):
             result, note = "error", str(e).splitlines()[0][:300]
         checks.append((row, live, result, note))
         now = "-" if live is None else f"{live['price']} {live['available']}"
+        if result != "match" and live:
+            note = f"from {live['from']}"[:300]
         print(f"  {row['product_id']}: saved {row['price']} {row['available']} -> {now}: {result}"
               + (f" ({note})" if note else ""), flush=True)
         time.sleep(1)
@@ -245,7 +281,8 @@ def check_site(browser, site, run_id, sample):
     if os.getenv("QA_DRY_RUN"):
         print(f"{site} run {run_id}: {status_of([c[2] for c in checks])} (dry run, not saved)", flush=True)
         return
-    values = [(site, run_id, row["product_id"], row["url"], "page" if live else None, row["price"],
+    source = "api" if site in STORE_API else "page"
+    values = [(site, run_id, row["product_id"], row["url"], source if live else None, row["price"],
                live["price"] if live else None, row["available"], live["available"] if live else None,
                result, note) for row, live, result, note in checks]
     placeholders = ", ".join(["(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"] * len(values))
@@ -266,9 +303,11 @@ def main():
     # QA_HEADFUL=1: a visible Chrome window (on GitHub inside xvfb), which some bot walls let
     # through where a headless one isn't; off-screen on a desktop.
     headful = bool(os.getenv("QA_HEADFUL"))
+    # Without the "controlled by automated software" flags, as a buyer's Chrome
+    args = ["--disable-blink-features=AutomationControlled"] + (["--window-position=-2400,-2400"] if headful else [])
     with sync_playwright() as p:
         browser = p.chromium.launch(channel=os.getenv("QA_BROWSER_CHANNEL", "chrome"), headless=not headful,
-                                    args=["--window-position=-2400,-2400"] if headful else [])
+                                    args=args, ignore_default_args=["--enable-automation"])
         for site in sites:
             run_id, sample = samples[site]
             if not sample:
