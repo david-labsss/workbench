@@ -13,6 +13,8 @@ import html
 import re
 import time
 
+import requests
+
 from common import http, schema
 
 PAGE = 50
@@ -80,10 +82,22 @@ def fetch_products(base, limit=0):
                "Content-Type": "application/json"}
     products, after = [], None
     while True:
-        r = http.session().post(base + "/graphql", headers=headers, timeout=60,
-                                json={"query": QUERY, "variables": {"first": PAGE, "after": after}})
-        r.raise_for_status()
-        data = r.json()
+        data = None
+        for attempt in range(6):
+            try:
+                r = http.session().post(base + "/graphql", headers=headers, timeout=60,
+                                        json={"query": QUERY, "variables": {"first": PAGE, "after": after}})
+                r.raise_for_status()
+                data = r.json()
+                break
+            except (requests.exceptions.RequestException, ValueError) as e:
+                # A transient drop (ChunkedEncodingError / connection reset / a non-JSON body) on
+                # a big catalogue must not abort the whole run: retry the same cursor. A page that
+                # keeps failing still raises, so it is never mistaken for the end of the list.
+                if attempt == 5:
+                    raise
+                print(f"WARN graphql page failed ({type(e).__name__}); retry {attempt + 1}/5", flush=True)
+                time.sleep(3 * (attempt + 1))
         if data.get("errors"):
             raise RuntimeError(f"GraphQL error: {data['errors'][0].get('message')}")
         page = data["data"]["site"]["products"]

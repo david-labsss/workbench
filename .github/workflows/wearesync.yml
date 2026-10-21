@@ -22,7 +22,7 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     env:
       N8N_WEBHOOK_URL: ${{ secrets.NEW_N8N_WEBHOOK_URL }}
     steps:
@@ -42,6 +42,9 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           MAX_PRODUCTS: ${{ inputs.max_products }}
           DRY_RUN: ${{ inputs.dry_run }}
+          # shop-all deep paging is unreliable past ~p2000; cap to the reliable range so a full
+          # run completes and saves a stable partial snapshot (listed=None) instead of timing out.
+          MAX_PAGES: "2000"
         run: python -u -m wearesync.scrape
 
       - name: Report result to n8n
