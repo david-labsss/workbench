@@ -29,9 +29,18 @@ labels are discarded as junk). No `condition` attribute exists, so condition is 
 title / category path when present. The deepest category path is reported; many Storage products
 are cross-listed in deeper computing/peripherals trees, so `category` may show that branch.
 
+Price: the GraphQL API returns a price LOWER than the storefront shows a buyer. The store
+applies a fixed, store-wide display markup that the API does not (confirmed a uniform linear
+transform across the whole price range: storefront = api_price * a + b, where a is a ~1.2x
+markup and b a flat fee of ~NGN 20,000 / GBP 10). We calibrate (a, b) from live product pages
+at the start of every run (so a change to the store's markup is picked up automatically) and
+apply it to every product; the run aborts rather than save prices the sampled pages disagree
+on. See storefront_markup().
+
 Mapped: product_id (decoded uid), sku / part_number / model_number (the store's SKU), title,
-brand (manufacturer label), category (deepest path), price (final, NGN), compare_at_price
-(regular when a sale price is lower), availability (stock_status), condition (from text), url.
+brand (manufacturer label), category (deepest path), price (final, NGN, with the storefront
+markup applied so it equals the page), compare_at_price (regular when a sale price is lower),
+availability (stock_status), condition (from text), url.
 
 Env vars:
   DATABASE_URL   Postgres URL for the scraper_writer role
@@ -55,6 +64,14 @@ CAP = 10000          # Magento never returns more results than this for one filt
 PAGE = 300           # products per page; at this size the store returns every page with no gaps
 MAX_PAGE = CAP // PAGE
 DELAY = 0.3          # polite pause between requests
+SAMPLE = 16          # product pages sampled to calibrate the storefront price markup
+MIN_SAMPLE = 8       # need at least this many good sample pages, or abort the run
+
+# The buyer-visible price on a product page comes from its schema.org JSON-LD offer (and, as a
+# fallback, the itemprop=price meta tag).
+PRICE_LD_RE = re.compile(r'"offers"\s*:\s*\{[^{}]*?"price"\s*:\s*"?([\d.]+)', re.S)
+META_PRICE_RE = re.compile(r'itemprop="price"[^>]*?content="([\d.]+)"'
+                           r'|content="([\d.]+)"[^>]*?itemprop="price"')
 
 PRODUCT_FIELDS = (
     "uid sku name url_key url_suffix stock_status only_x_left_in_stock manufacturer "
@@ -95,7 +112,7 @@ def category_query(page, fields, with_info=False):
 
 
 # ---------------------------------------------------------------- paging
-def walk_category(seen, scraped_at, mfr, limit):
+def walk_category(seen, scraped_at, mfr, limit, markup):
     """Collect every product in the Storage category, deduped by entity id. Pages EVERY page
     1..total_pages (this store returns empty interior pages, so an empty page is NOT the end)."""
     head = gql(category_query(1, "uid", with_info=True))["products"]
@@ -109,7 +126,7 @@ def walk_category(seen, scraped_at, mfr, limit):
     for page in range(1, min(total_pages, MAX_PAGE) + 1):
         items = gql(category_query(page, PRODUCT_FIELDS))["products"]["items"]
         for it in items:
-            add_item(it, seen, scraped_at, mfr)
+            add_item(it, seen, scraped_at, mfr, markup)
         if limit and len(seen) >= limit:
             break
         time.sleep(DELAY)
@@ -168,7 +185,68 @@ def decode_uid(uid):
         return str(uid)
 
 
-def add_item(item, seen, scraped_at, mfr):
+def product_url(item):
+    url_key = item.get("url_key") or ""
+    return f"{BASE}/{url_key}{item.get('url_suffix') or ''}" if url_key else BASE
+
+
+# ---------------------------------------------------------------- storefront price markup
+def page_price(url):
+    """The selling price a buyer sees on a product page: the schema.org JSON-LD offer price,
+    falling back to the itemprop=price meta tag. None if the page is missing/not 200/has no
+    price."""
+    try:
+        r = http.session().get(url, timeout=90)
+    except Exception:  # noqa: BLE001
+        return None
+    if r.status_code != 200:
+        return None
+    m = PRICE_LD_RE.search(r.text)
+    if m:
+        return to_float(m.group(1))
+    m = META_PRICE_RE.search(r.text)
+    return to_float(m.group(1) or m.group(2)) if m else None
+
+
+def storefront_markup():
+    """Calibrate the store-wide display markup (a, b) mapping a GraphQL price to the storefront
+    price shown to a buyer (page = api * a + b), from live product pages. Sampling spans the
+    price range; every sample must agree on one transform or the run aborts (we never save
+    prices the pages disagree with). Returns (a, b)."""
+    data = gql(category_query(
+        1, "url_key url_suffix price_range{minimum_price{final_price{value}}}"))
+    items = [it for it in data["products"]["items"]
+             if (((it.get("price_range") or {}).get("minimum_price") or {})
+                 .get("final_price") or {}).get("value")]
+    items.sort(key=lambda it: it["price_range"]["minimum_price"]["final_price"]["value"])
+    if len(items) < MIN_SAMPLE:
+        raise RuntimeError(f"only {len(items)} priced products to calibrate the markup from")
+    points = []
+    for it in items[::max(1, len(items) // SAMPLE)][:SAMPLE]:
+        gqlv = it["price_range"]["minimum_price"]["final_price"]["value"]
+        page = page_price(product_url(it))
+        if page:
+            points.append((gqlv, page))
+        time.sleep(DELAY)
+    if len(points) < MIN_SAMPLE:
+        raise RuntimeError(f"only reached {len(points)} live prices to calibrate the storefront "
+                           "markup; refusing to save unverified prices")
+    (glo, plo), (ghi, phi) = min(points), max(points)
+    if ghi == glo:
+        raise RuntimeError("calibration prices span no range; cannot derive the markup")
+    a = (phi - plo) / (ghi - glo)
+    b = plo - a * glo
+    for g, p in points:
+        if abs(a * g + b - p) > max(1.0, 0.0005 * p):
+            raise RuntimeError(f"storefront markup is not one uniform transform (gql {g} -> "
+                               f"page {p}, expected {a * g + b:.2f}); not saving prices")
+    print(f"storefront markup calibrated from {len(points)} live pages: "
+          f"price = gql*{a:.6f} + {b:.2f}", flush=True)
+    return a, b
+
+
+# ---------------------------------------------------------------- mapping (continued)
+def add_item(item, seen, scraped_at, mfr, markup):
     pid = decode_uid(item.get("uid"))
     if pid in seen:
         return
@@ -177,10 +255,15 @@ def add_item(item, seen, scraped_at, mfr):
     prices = (item.get("price_range") or {}).get("minimum_price") or {}
     final = money((prices.get("final_price") or {}).get("value"))
     regular = money((prices.get("regular_price") or {}).get("value"))
+    # Apply the store-wide display markup the API omits, so price matches the buyer's page.
+    a, b = markup
+    if final is not None:
+        final = round(final * a + b, 2)
+    if regular is not None:
+        regular = round(regular * a + b, 2)
     sku = item.get("sku") or ""
     brand = mfr.get(str(item.get("manufacturer"))) if item.get("manufacturer") is not None else ""
-    url_key = item.get("url_key") or ""
-    url = f"{BASE}/{url_key}{item.get('url_suffix') or ''}" if url_key else BASE
+    url = product_url(item)
     image = (item.get("image") or {}).get("url") or (item.get("small_image") or {}).get("url")
     description = schema.plain_text((item.get("short_description") or {}).get("html")) \
         or schema.plain_text((item.get("description") or {}).get("html"))
@@ -210,8 +293,9 @@ def add_item(item, seen, scraped_at, mfr):
 def scrape(limit, scraped_at):
     mfr = manufacturer_labels()
     print(f"manufacturer labels: {len(mfr)}", flush=True)
+    markup = storefront_markup()
     seen = {}
-    walk_category(seen, scraped_at, mfr, limit)
+    walk_category(seen, scraped_at, mfr, limit, markup)
     print(f"collected {len(seen)} unique products", flush=True)
     rows = list(seen.values())
     if limit:

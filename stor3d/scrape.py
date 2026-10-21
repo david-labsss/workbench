@@ -53,12 +53,19 @@ def parse_card(card, scraped_at):
     price_box = card.select_one(".product-list-item-price")
     price = compare = None
     if price_box:
-        b = price_box.select_one("p.b")
+        # .a is the real current selling price (it matches the big number on the
+        # /Product/Details page); .b (labelled "Price:") is a secondary list figure and
+        # .c is the savings = .b - .a. Earlier this was reversed, so the selling price
+        # landed in compare_at_price and the list figure in price.
         a = price_box.select_one("p.a")
-        price = usd(b.get_text()) if b else None
-        compare = usd(a.get_text()) if a else None
-    if price is None:
-        price = compare                  # some cards show a single price (.a only)
+        b = price_box.select_one("p.b")
+        price = usd(a.get_text()) if a else None
+        list_price = usd(b.get_text()) if b else None
+        if price is None:
+            price = list_price           # some cards show a single price (.b only)
+        # compare_at_price is a was/list price: keep it only when it is genuinely higher
+        # than what the buyer pays, otherwise leave it blank (no fake discount).
+        compare = list_price if (price and list_price and list_price > price) else None
 
     right = card.select_one(".product-list-item-right")
     avail_text = ""

@@ -52,7 +52,7 @@ PRODUCT_FIELDS = (
     "uid sku name url_key url_suffix stock_status only_x_left_in_stock manufacturer "
     "price_range{minimum_price{regular_price{value} final_price{value}}} "
     "categories{name url_path} image{url} small_image{url} "
-    "description{html} short_description{html}"
+    "description{html} short_description{html} url_rewrites{url}"
 )
 
 CONDITIONS = [
@@ -102,7 +102,7 @@ def count(f):
     return gql(products_query(f, 1, 1, "uid"))["products"]["total_count"]
 
 
-def page_all(f, seen, scraped_at, mfr, limit):
+def page_all(f, seen, skipped, scraped_at, mfr, limit):
     """Page every product matching f (up to the cap) into `seen`."""
     total = count(f)
     if total == 0:
@@ -111,7 +111,7 @@ def page_all(f, seen, scraped_at, mfr, limit):
     for page in range(1, pages + 1):
         items = gql(products_query(f, PAGE, page, PRODUCT_FIELDS))["products"]["items"]
         for it in items:
-            add_item(it, seen, scraped_at, mfr)
+            add_item(it, seen, skipped, scraped_at, mfr)
         if not items or (limit and len(seen) >= limit):
             break
         time.sleep(DELAY)
@@ -141,14 +141,14 @@ def manufacturer_children(f):
     return []
 
 
-def collect(f, seen, scraped_at, mfr, limit):
+def collect(f, seen, skipped, scraped_at, mfr, limit):
     """Fetch every product matching f into `seen`; if f hits the cap, split it (price, then
     manufacturer). A slice that still can't be split takes the first CAP and warns."""
     total = count(f)
     if total == 0:
         return
     if total < CAP:
-        page_all(f, seen, scraped_at, mfr, limit)
+        page_all(f, seen, skipped, scraped_at, mfr, limit)
         return
     children = price_children(*f["price"]) if "manufacturer" not in f else []
     builder = lambda r: {**f, "price": r}  # noqa: E731
@@ -158,13 +158,13 @@ def collect(f, seen, scraped_at, mfr, limit):
     if not children:
         print(f"WARN {f} is capped at {total} and can't be split further; taking the first {CAP}",
               flush=True)
-        page_all(f, seen, scraped_at, mfr, limit)
+        page_all(f, seen, skipped, scraped_at, mfr, limit)
         return
     for child in children:
         if limit and len(seen) >= limit:
             return
         collect(builder(child) if "manufacturer" not in f else child,
-                seen, scraped_at, mfr, limit)
+                seen, skipped, scraped_at, mfr, limit)
 
 
 # ---------------------------------------------------------------- brand (manufacturer) labels
@@ -220,9 +220,18 @@ def decode_uid(uid):
         return str(uid)
 
 
-def add_item(item, seen, scraped_at, mfr):
+def add_item(item, seen, skipped, scraped_at, mfr):
     pid = decode_uid(item.get("uid"))
-    if pid in seen:
+    if pid in seen or pid in skipped:
+        return
+    # A product with no URL rewrite has no storefront page: /<url_key>.html returns 404.
+    # (Confirmed against the live site: a non-empty url_rewrites perfectly predicts an HTTP-200
+    # product page and an empty one a 404, for both in-stock and out-of-stock products -- these
+    # are "not visible individually" catalogue entries a buyer can never open.) We must not save
+    # a dead URL, so drop them; they are tracked in `skipped` only to confirm the crawl reached
+    # the whole catalogue.
+    if not (item.get("url_rewrites") or []):
+        skipped.add(pid)
         return
     title = item.get("name") or ""
     category = category_path(item.get("categories"))
@@ -264,12 +273,24 @@ def scrape(limit, scraped_at):
     root_total = count({"price": (0.0, None)})
     print(f"catalogue lists {root_total} products (price>=0)", flush=True)
     seen = {}
-    collect({"price": (0.0, None)}, seen, scraped_at, mfr, limit)
-    print(f"collected {len(seen)} unique products", flush=True)
+    skipped = set()
+    collect({"price": (0.0, None)}, seen, skipped, scraped_at, mfr, limit)
+    kept, dropped = len(seen), len(skipped)
+    print(f"collected {kept} products with a storefront page; "
+          f"dropped {dropped} with no page (would 404)", flush=True)
     rows = list(seen.values())
     if limit:
         return rows[:limit], None
-    return rows, root_total
+    # We deliberately drop the pageless products, so len(rows) is well under the catalogue count
+    # and the runner's own completeness check can't be used against root_total (so listed=None
+    # disables it). Guard here instead that the crawl actually reached the whole catalogue
+    # (kept + dropped ~= root_total); a big shortfall means price slices failed, so refuse to
+    # overwrite good data with a partial snapshot.
+    crawled = kept + dropped
+    if root_total and crawled < runner.COMPLETE * root_total:
+        raise SystemExit(f"Only crawled {crawled} of {root_total} catalogue products "
+                         f"({crawled / root_total:.0%}); not saving a partial snapshot")
+    return rows, None
 
 
 if __name__ == "__main__":
