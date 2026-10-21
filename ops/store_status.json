@@ -26,11 +26,10 @@
   "canadacomputers.com": "Blocked (WAF/IP)",
   "cdw.com": "Blocked (Akamai)",
   "centralcomputer.com": "Blocked (Cloudflare)",
-  "ciscotransceivers.com": "Blocked (Cloudflare)",
   "compnetarena.com": "No public catalogue",
   "compsource.com": "Blocked (Cloudflare)",
   "comtek.co.uk": "No public catalogue",
-  "connection.com": "Blocked (Akamai)",
+  "connection.com": "Blocked (Akamai; search API needs a secret key)",
   "convergenttechnology.com": "Building",
   "covenco.com": "Blocked (Cloudflare)",
   "cpumedics.com": "Built, not live (untested)",
@@ -96,7 +95,7 @@
   "shidirect.com": "Blocked (Cloudflare)",
   "shopjimmy.com": "Building",
   "sierraic.com": "Blocked (Cloudflare)",
-  "silworks.com": "Blocked (Cloudflare)",
+  "silworks.com": "Blocked (all countries; likely dead)",
   "singular.com.cy": "Blocked (Cloudflare)",
   "smicro.eu": "Blocked (Cloudflare)",
   "stockinthechannel.com": "No public catalogue",
@@ -118,6 +117,6 @@
   "wdpi.com": "Blocked (Cloudflare; no prices shown)",
   "wearesync.co.uk": "Built, not live",
   "xbyte.com": "Blocked (Cloudflare)",
-  "ziestech.com": "Built, not live (API exposes 106k of 213k)",
-  "zones.com": "Blocked (Akamai)"
+  "ziestech.com": "Dropped (Canada-only, CAD, mostly software)",
+  "zones.com": "Blocked (CAPTCHA after 5 listing pages)"
 }
