@@ -3,7 +3,7 @@ name: Scrape Itosolutions
 # Started by n8n through the GitHub API (workflow_dispatch), or by hand from the Actions tab.
 on:
   schedule:
-    - cron: "30 0 * * *"
+    - cron: "0 0 * * *"
   workflow_dispatch:
     inputs:
       max_products:
@@ -22,7 +22,7 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || github.repository_owner == 'Aaron-labbss'
+    if: github.event_name == 'workflow_dispatch' || github.repository_owner == 'Adams-anlyto'
     timeout-minutes: 300
     env:
       N8N_WEBHOOK_URL: ${{ secrets.NEW_N8N_WEBHOOK_URL }}

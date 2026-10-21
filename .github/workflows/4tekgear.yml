@@ -22,7 +22,7 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || github.repository_owner == 'Aaron-labbss'
+    if: github.event_name == 'workflow_dispatch' || github.repository_owner == 'Buttler-labss'
     timeout-minutes: 180
     env:
       N8N_WEBHOOK_URL: ${{ secrets.NEW_N8N_WEBHOOK_URL }}

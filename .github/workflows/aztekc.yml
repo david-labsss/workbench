@@ -8,7 +8,7 @@ name: Scrape Aztek Computers
 #            from firing on all five mirror repos; manual dispatch still works anywhere.
 on:
   schedule:
-    - cron: "0 4 * * 0"          # Sundays 04:00 UTC: weekly real-stock reconciliation (FULL)
+    - cron: "0 12 * * 0"          # Sundays 12:00 UTC: weekly real-stock reconciliation (FULL)
   workflow_dispatch:
     inputs:
       max_products:
@@ -31,7 +31,7 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || github.repository_owner == 'Aaron-labbss'
+    if: github.event_name == 'workflow_dispatch' || github.repository_owner == 'Adams-anlyto'
     timeout-minutes: 330
     env:
       N8N_WEBHOOK_URL: ${{ secrets.NEW_N8N_WEBHOOK_URL }}
