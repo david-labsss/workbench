@@ -2,10 +2,11 @@
 
 The dashboard (server-scrapers-ui, Vercel Cron, Frankfurt) re-fetches 25 random products of each
 site's newest run and compares them with what was saved. Some sites it can't judge from there:
-stores that show buyers outside the US other prices or stock (naddod, staples, directhardwaresupply), stores whose bot
-wall turns servers away (avoira, serverbasket, directdial, insidesystems), and pages that draw
-their price with JavaScript (hddprime, uptimumtech, stor3d). Here each product page is opened in Chrome from the US, like
-their scrapers, and read as a buyer sees it.
+stores that show buyers outside the US other prices or stock (naddod, staples, directhardwaresupply),
+stores whose bot wall turns servers away (avoira, serverbasket, directdial, insidesystems,
+goharddrive, bulkdevices, 4tekgear, pbtech), and pages that draw their price with JavaScript
+(hddprime, uptimumtech, stor3d). Here each product page is opened in Chrome from the US, like their
+scrapers, and read as a buyer sees it.
 
 The same rules as the dashboard's QA (src/lib/qa.ts there):
   - 25 random products of the site's newest saved full run
@@ -34,14 +35,15 @@ from common import db
 
 # The dashboard's daily QA leaves these out (NO_LIVE_CHECK in its src/app/api/qa/run/route.ts): keep the two lists alike.
 SITES = ["naddod", "staples", "avoira", "serverbasket", "hddprime", "uptimumtech", "stor3d", "directdial", "insidesystems",
-         "directhardwaresupply"]
+         "directhardwaresupply", "goharddrive", "bulkdevices", "4tekgear", "pbtech"]
 SAMPLE = int(os.getenv("QA_SAMPLE") or 25)  # fewer only for trying it out
 MAX_MISMATCH = 0.1
 MIN_CHECKED = 10
+BLOCKED_STOP = 5
 MISMATCHES = ("price", "stock", "price+stock")
 # Stores priced in another currency (the dashboard's src/lib/currency.ts): their pages and data can
 # round a converted price a unit apart.
-OTHER_CURRENCY = {"avoira", "uptimumtech"}
+OTHER_CURRENCY = {"avoira", "uptimumtech", "pbtech"}
 CURRENCY_ROUNDING = 0.002
 QUOTE_ONLY = re.compile(r"request (a )?quote|call for pric|contact (us )?for pric|price on request|get a quote|"
                         r"ask for (a )?price|quote only", re.I)
@@ -159,17 +161,17 @@ def key(v):
 
 def switch_to_usd(page, home):
     """Pick US dollars in the store's header, as its scraper does: the choice stays in the session."""
-    page.goto(home, wait_until="domcontentloaded", timeout=60_000)
-    shown_in = PAGE_CURRENCY.search(page.content())
+    # The page as the store sent it: the browser's copy of the DOM escapes the button's quotes
+    html = page.goto(home, wait_until="domcontentloaded", timeout=60_000).text()
+    shown_in = PAGE_CURRENCY.search(html)
     if shown_in and shown_in.group(1) == "USD":
         return
-    form = SWITCH_FORM.search(page.content())
+    form = SWITCH_FORM.search(html)
     if not form:
-        raise RuntimeError(f"{home}: no 'USD - US Dollar' switch")
+        raise RuntimeError(f"{home}: no 'USD - US Dollar' switch ({shown_in.group(1) if shown_in else '?'} shown)")
     with page.expect_navigation(timeout=60_000):
         page.evaluate(f"hyva.postForm({form.group(1)})")
-    page.goto(home, wait_until="domcontentloaded", timeout=60_000)
-    shown_in = PAGE_CURRENCY.search(page.content())
+    shown_in = PAGE_CURRENCY.search(page.goto(home, wait_until="domcontentloaded", timeout=60_000).text())
     if not shown_in or shown_in.group(1) != "USD":
         raise RuntimeError(f"switching to US dollars failed: the store shows {shown_in.group(1) if shown_in else '?'}")
 
@@ -182,17 +184,20 @@ def live_product(page, row, site):
     if response and response.status in (404, 410):
         raise Unclear(f"page gone ({response.status})")
     status = response.status if response else None
+    checked = False  # a bot check let us through
     try:
-        page.wait_for_function(CHECKING, timeout=30_000)
-    except Exception:  # noqa: BLE001 - still checking: blocked, below
+        if not page.evaluate(CHECKING):
+            page.wait_for_function(CHECKING, timeout=30_000)
+            checked = True
+    except Exception:  # noqa: BLE001 - still checking (blocked, below), or the page moved on meanwhile
         pass
     try:
         page.wait_for_load_state("networkidle", timeout=15_000)
     except Exception:  # noqa: BLE001 - pages that keep polling: read them as they are
         pass
     seen = page.evaluate(READ_PAGE)
-    if status == 403 and not BLOCKED.search(seen["title"] or ""):
-        status = 200  # the bot check let us through and loaded the page
+    if status == 403 and checked and not BLOCKED.search(seen["title"] or ""):
+        status = 200  # the bot check loaded the page
     if BLOCKED.search(seen["title"] or "") or status in (403, 429):
         raise RuntimeError(f"blocked ({status or '?'}: {seen['title'][:60]})")
     if status and status >= 500:
@@ -228,7 +233,7 @@ def live_product(page, row, site):
         shown = next((p for p in seen["prices"] if amount(p)), None)
         price, source = amount(shown), f"shown {shown!r}"
     if price is None and (row["price"] or availability is None):
-        raise Unclear("no price on the page")
+        raise Unclear(f"no price on the page ({status}: {seen['title'][:50]})")
     return {"price": price, "available": availability, "from": source}
 
 
@@ -312,6 +317,10 @@ def check_site(browser, site, run_id, sample):
             note = f"from {live['from']}"[:300]
         print(f"  {row['product_id']}: saved {row['price']} {row['available']} -> {now}: {result}"
               + (f" ({note})" if note else ""), flush=True)
+        # A store that turns away the first products turns away the rest: not worth the wait
+        if len(checks) == BLOCKED_STOP and all(c[2] == "error" and "blocked" in (c[3] or "") for c in checks):
+            print(f"  the first {BLOCKED_STOP} were blocked: the rest are left out", flush=True)
+            break
         time.sleep(1)
     context.close()
 
