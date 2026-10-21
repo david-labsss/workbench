@@ -2,3 +2,4 @@ requests>=2.31
 beautifulsoup4>=4.12
 gspread>=6.0
 psycopg[binary]>=3.2
+curl_cffi>=0.7

@@ -43,6 +43,13 @@ from bs4 import BeautifulSoup
 
 from common import http, runner, schema
 
+try:
+    # curl_cffi impersonates a real browser's TLS/JA3 fingerprint, which clears Cloudflare's
+    # passive bot check from datacenter IPs (plain requests gets a 403 from GitHub's runners).
+    from curl_cffi import requests as cffi
+except ImportError:
+    cffi = None
+
 SITE = "ciscotransceivers"
 BASE = "https://www.ciscotransceivers.com"
 WORKERS = int(os.getenv("SCRAPE_WORKERS") or 4)
@@ -57,10 +64,20 @@ PRICE_RE = re.compile(r"([\d,]+(?:\.\d+)?)")
 
 
 def get(url):
-    r = http.session().get(url, timeout=60)
-    r.raise_for_status()
-    time.sleep(DELAY)
-    return r.text
+    last = None
+    for attempt in range(4):
+        try:
+            if cffi is not None:
+                r = cffi.get(url, timeout=60, impersonate="chrome")
+            else:
+                r = http.session().get(url, timeout=60)
+            r.raise_for_status()
+            time.sleep(DELAY)
+            return r.text
+        except Exception as e:  # noqa: BLE001 - retry transient blocks/drops before giving up
+            last = e
+            time.sleep(2 * (attempt + 1))
+    raise last
 
 
 def clean(text):
