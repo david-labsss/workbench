@@ -3,7 +3,7 @@ name: Scrape East Digital
 # Started by n8n through the GitHub API (workflow_dispatch), or by hand from the Actions tab.
 on:
   schedule:
-    - cron: "30 10 * * *"
+    - cron: "45 1 * * *"
   workflow_dispatch:
     inputs:
       max_products:

@@ -3,7 +3,7 @@ name: Scrape Esus IT
 # Started by n8n through the GitHub API (workflow_dispatch), or by hand from the Actions tab.
 on:
   schedule:
-    - cron: "30 11 * * *"
+    - cron: "30 1 * * *"
   workflow_dispatch:
     inputs:
       max_products:

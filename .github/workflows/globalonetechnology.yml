@@ -3,7 +3,7 @@ name: Scrape Global One Technology
 # Started by n8n through the GitHub API (workflow_dispatch), or by hand from the Actions tab.
 on:
   schedule:
-    - cron: "20 7 * * *"
+    - cron: "15 4 * * *"
   workflow_dispatch:
     inputs:
       max_products:
