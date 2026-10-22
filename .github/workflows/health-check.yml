@@ -1,0 +1,29 @@
+name: Health Check
+
+# Daily scraper health check (ops/health_check.py): flags sites that never saved, stopped saving,
+# or have poor price/image/description coverage. Runs after the morning scrape window so it sees
+# the day's results; the report is in the run's Summary. Runs on one account (guarded); the
+# scheduler skips it because it carries its own cron.
+
+on:
+  schedule:
+    - cron: "0 8 * * *"      # 13:00 Asia/Karachi, after the 06:00-12:00 scrape window
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.repository_owner == 'Adam-lab-maker'
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Scraper health
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python -u ops/health_check.py
