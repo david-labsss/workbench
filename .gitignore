@@ -11,3 +11,8 @@ credentials*.json
 .venv/
 .venv-serversupply/
 serversupply/.chrome-profile/
+
+# scratch/temp dumps (may contain other clients secrets)
+*.tmp.json
+*.tmp.txt
+sh.html

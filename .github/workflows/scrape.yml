@@ -1,0 +1,54 @@
+name: Scrape
+run-name: Scrape ${{ inputs.site }}
+
+# One shared scraper workflow for every standard site, instead of a workflow file per site. The
+# scheduler (scheduler.yml) dispatches this once per site with the site's key; it runs that site's
+# scraper (python -m <site>.scrape). Sites that need extra settings (directmacro's QA step,
+# wearesync's MAX_PAGES, gotodirect's shards, servertechcentral, aztekc) keep their own workflow.
+# Run one by hand from the Actions tab with the site key, or let the scheduler drive it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      site:
+        description: "Site key, e.g. serverpartdeals (must be a <site> with a <site>/scrape.py)"
+        required: true
+      max_products:
+        description: "Only scrape about N products (blank = all). Use for test runs."
+        required: false
+        default: ""
+      dry_run:
+        description: "1 = print sample rows only, don't save to the database"
+        required: false
+        default: "0"
+
+concurrency:
+  group: scrape-${{ inputs.site }}
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scraper
+        env:
+          SITE: ${{ inputs.site }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MAX_PRODUCTS: ${{ inputs.max_products }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          case "$SITE" in
+            *[!a-z0-9]*|"") echo "invalid site key: '$SITE'"; exit 1;;
+          esac
+          python -u -m "${SITE}.scrape"

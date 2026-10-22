@@ -1,0 +1,524 @@
+{
+ "4startech": {
+  "owner": "david-labsss",
+  "weight": 60
+ },
+ "4tekgear": {
+  "owner": "Buttler-labss",
+  "weight": 180
+ },
+ "aaawave": {
+  "owner": "Adam-lab-maker",
+  "weight": 60
+ },
+ "acmemicro": {
+  "owner": "Buttler-labss",
+  "weight": 60
+ },
+ "aloinfousa": {
+  "owner": "Adam-lab-maker",
+  "weight": 90
+ },
+ "altatechnologies": {
+  "owner": "Amelia-labss",
+  "weight": 60
+ },
+ "atechmemory": {
+  "owner": "david-labsss",
+  "weight": 300
+ },
+ "atgbics": {
+  "owner": "Adam-lab-maker",
+  "weight": 90
+ },
+ "avendor": {
+  "owner": "Adam-lab-maker",
+  "weight": 60
+ },
+ "avoira": {
+  "owner": "Adam-labbss",
+  "weight": 240
+ },
+ "bluelink": {
+  "owner": "Buttler-labss",
+  "weight": 120
+ },
+ "boosthardware": {
+  "owner": "Bens-labsss",
+  "weight": 240
+ },
+ "brightstarsystems": {
+  "owner": "Adam-labbss",
+  "weight": 60
+ },
+ "bulkdevices": {
+  "owner": "Amelia-labss",
+  "weight": 75
+ },
+ "bytestock": {
+  "owner": "Adams-anlyto",
+  "weight": 60
+ },
+ "calhountech": {
+  "owner": "Bens-labsss",
+  "weight": 90
+ },
+ "cdw": {
+  "owner": "Bens-labsss",
+  "weight": 30
+ },
+ "chert": {
+  "owner": "Buttler-labss",
+  "weight": 120
+ },
+ "ciscotransceivers": {
+  "owner": "Bens-labsss",
+  "weight": 30
+ },
+ "ckmserver": {
+  "owner": "Adam-labbss",
+  "weight": 60
+ },
+ "compeve": {
+  "owner": "Bens-labsss",
+  "weight": 90
+ },
+ "compridis": {
+  "owner": "Amelia-labss",
+  "weight": 120
+ },
+ "compudevices": {
+  "owner": "Adam-lab-maker",
+  "weight": 180
+ },
+ "compuwyze": {
+  "owner": "Adam-lab-maker",
+  "weight": 120
+ },
+ "comsys": {
+  "owner": "Bens-labsss",
+  "weight": 350
+ },
+ "convergenttechnology": {
+  "owner": "Adam-labbss",
+  "weight": 120
+ },
+ "core4solutions": {
+  "owner": "Adams-anlyto",
+  "weight": 90
+ },
+ "cpumedics": {
+  "owner": "Buttler-labss",
+  "weight": 90
+ },
+ "datadirectglobal": {
+  "owner": "Buttler-labss",
+  "weight": 30
+ },
+ "datafox": {
+  "owner": "Buttler-labss",
+  "weight": 120
+ },
+ "dataknox": {
+  "owner": "Adam-lab-maker",
+  "weight": 60
+ },
+ "dedicatednetworksinc": {
+  "owner": "Adams-anlyto",
+  "weight": 60
+ },
+ "deploydepot": {
+  "owner": "Bens-labsss",
+  "weight": 120
+ },
+ "directdial": {
+  "owner": "Amelia-labss",
+  "weight": 30
+ },
+ "directhardwaresupply": {
+  "owner": "david-labsss",
+  "weight": 240
+ },
+ "directmacro": {
+  "owner": "Adam-lab-maker",
+  "weight": 60,
+  "wf": "directmacro"
+ },
+ "disctech": {
+  "owner": "Adam-lab-maker",
+  "weight": 60
+ },
+ "dziner": {
+  "owner": "Amelia-labss",
+  "weight": 30
+ },
+ "eastdigital": {
+  "owner": "Adams-anlyto",
+  "weight": 120
+ },
+ "edgeoptic": {
+  "owner": "david-labsss",
+  "weight": 90
+ },
+ "enterasource": {
+  "owner": "Amelia-labss",
+  "weight": 60
+ },
+ "epoka": {
+  "owner": "david-labsss",
+  "weight": 120
+ },
+ "esaitech": {
+  "owner": "Adam-lab-maker",
+  "weight": 180
+ },
+ "esus": {
+  "owner": "Buttler-labss",
+  "weight": 180
+ },
+ "expresscomputersystems": {
+  "owner": "Amelia-labss",
+  "weight": 120
+ },
+ "flagshiptech": {
+  "owner": "Amelia-labss",
+  "weight": 60
+ },
+ "fleetnetwork": {
+  "owner": "Adam-labbss",
+  "weight": 180
+ },
+ "gekko": {
+  "owner": "Adams-anlyto",
+  "weight": 180
+ },
+ "globalnetpro": {
+  "owner": "Adam-labbss",
+  "weight": 60
+ },
+ "globalonetechnology": {
+  "owner": "Adam-labbss",
+  "weight": 60
+ },
+ "goharddrive": {
+  "owner": "Bens-labsss",
+  "weight": 60
+ },
+ "happyware": {
+  "owner": "Amelia-labss",
+  "weight": 30
+ },
+ "harddiskdirect": {
+  "owner": "Bens-labsss",
+  "weight": 90
+ },
+ "hardwarejet": {
+  "owner": "Amelia-labss",
+  "weight": 60
+ },
+ "hummingbirdnetworks": {
+  "owner": "Amelia-labss",
+  "weight": 60
+ },
+ "icit": {
+  "owner": "Adam-lab-maker",
+  "weight": 60
+ },
+ "industryelectronics": {
+  "owner": "Adam-labbss",
+  "weight": 180
+ },
+ "insidesystems": {
+  "owner": "Adams-anlyto",
+  "weight": 120
+ },
+ "ipcstore": {
+  "owner": "Bens-labsss",
+  "weight": 60
+ },
+ "ipsecuritydepot": {
+  "owner": "Adams-anlyto",
+  "weight": 60
+ },
+ "itbargaincenter": {
+  "owner": "Adam-labbss",
+  "weight": 60
+ },
+ "itcreations": {
+  "owner": "Bens-labsss",
+  "weight": 180
+ },
+ "itdevicesonline": {
+  "owner": "Buttler-labss",
+  "weight": 300
+ },
+ "ithardwarehub": {
+  "owner": "david-labsss",
+  "weight": 180
+ },
+ "itosolutions": {
+  "owner": "Adams-anlyto",
+  "weight": 300
+ },
+ "jacob": {
+  "owner": "david-labsss",
+  "weight": 60
+ },
+ "linkusonline": {
+  "owner": "Bens-labsss",
+  "weight": 60
+ },
+ "lttpartners": {
+  "owner": "Adam-labbss",
+  "weight": 30
+ },
+ "memoryclearance": {
+  "owner": "Adam-lab-maker",
+  "weight": 90
+ },
+ "naddod": {
+  "owner": "david-labsss",
+  "weight": 120
+ },
+ "networkoutlet": {
+  "owner": "Amelia-labss",
+  "weight": 60
+ },
+ "networkswitch": {
+  "owner": "Bens-labsss",
+  "weight": 90
+ },
+ "networktigers": {
+  "owner": "Buttler-labss",
+  "weight": 60
+ },
+ "newtownspares": {
+  "owner": "Amelia-labss",
+  "weight": 120
+ },
+ "novianetworks": {
+  "owner": "Adam-labbss",
+  "weight": 60
+ },
+ "oempcworld": {
+  "owner": "Amelia-labss",
+  "weight": 60
+ },
+ "officecrave": {
+  "owner": "Bens-labsss",
+  "weight": 30
+ },
+ "orangehardwares": {
+  "owner": "Amelia-labss",
+  "weight": 180
+ },
+ "owl360it": {
+  "owner": "Buttler-labss",
+  "weight": 60
+ },
+ "pbtech": {
+  "owner": "Adam-lab-maker",
+  "weight": 120
+ },
+ "pcnation": {
+  "owner": "Adam-lab-maker",
+  "weight": 30
+ },
+ "pcserverandparts": {
+  "owner": "david-labsss",
+  "weight": 30
+ },
+ "prodisknetwork": {
+  "owner": "Buttler-labss",
+  "weight": 45
+ },
+ "ramkoenig": {
+  "owner": "Bens-labsss",
+  "weight": 90
+ },
+ "rebootit": {
+  "owner": "Adams-anlyto",
+  "weight": 90
+ },
+ "redcorp": {
+  "owner": "Adam-labbss",
+  "weight": 120
+ },
+ "renewtech": {
+  "owner": "Adam-labbss",
+  "weight": 300
+ },
+ "robertelectronics": {
+  "owner": "Adam-labbss",
+  "weight": 120
+ },
+ "sabrepc": {
+  "owner": "Adams-anlyto",
+  "weight": 20
+ },
+ "senetic": {
+  "owner": "Adam-lab-maker",
+  "weight": 300
+ },
+ "serverbasket": {
+  "owner": "Adams-anlyto",
+  "weight": 30
+ },
+ "serverdiskdrives": {
+  "owner": "Buttler-labss",
+  "weight": 60
+ },
+ "serverflake": {
+  "owner": "Adams-anlyto",
+  "weight": 90
+ },
+ "serverflow": {
+  "owner": "Bens-labsss",
+  "weight": 120
+ },
+ "serverhardware": {
+  "owner": "Bens-labsss",
+  "weight": 120
+ },
+ "servermall": {
+  "owner": "Bens-labsss",
+  "weight": 60
+ },
+ "serverorbit": {
+  "owner": "Adam-lab-maker",
+  "weight": 30
+ },
+ "serverpartdeals": {
+  "owner": "Adams-anlyto",
+  "weight": 60
+ },
+ "serverparts": {
+  "owner": "david-labsss",
+  "weight": 120
+ },
+ "serverparts4less": {
+  "owner": "Adam-lab-maker",
+  "weight": 90
+ },
+ "serverschmiede": {
+  "owner": "Amelia-labss",
+  "weight": 60
+ },
+ "servertechsupply": {
+  "owner": "Adams-anlyto",
+  "weight": 90
+ },
+ "serverworlds": {
+  "owner": "Amelia-labss",
+  "weight": 240
+ },
+ "shopjimmy": {
+  "owner": "david-labsss",
+  "weight": 90
+ },
+ "soliddiskdirect": {
+  "owner": "Amelia-labss",
+  "weight": 120
+ },
+ "sparepartworld": {
+  "owner": "Buttler-labss",
+  "weight": 90
+ },
+ "staples": {
+  "owner": "david-labsss",
+  "weight": 60
+ },
+ "stikc": {
+  "owner": "Adams-anlyto",
+  "weight": 60
+ },
+ "stor3d": {
+  "owner": "Amelia-labss",
+  "weight": 120
+ },
+ "storagepartsdirect": {
+  "owner": "david-labsss",
+  "weight": 60
+ },
+ "techforgood": {
+  "owner": "Adam-labbss",
+  "weight": 90
+ },
+ "techmikeny": {
+  "owner": "david-labsss",
+  "weight": 90
+ },
+ "technologygalaxy": {
+  "owner": "Buttler-labss",
+  "weight": 90
+ },
+ "tecisoft": {
+  "owner": "Adam-labbss",
+  "weight": 90
+ },
+ "tekboost": {
+  "owner": "Adam-labbss",
+  "weight": 30
+ },
+ "teqex": {
+  "owner": "Adams-anlyto",
+  "weight": 120
+ },
+ "terabitsystems": {
+  "owner": "david-labsss",
+  "weight": 30
+ },
+ "tergumit": {
+  "owner": "Amelia-labss",
+  "weight": 90
+ },
+ "theserverstore": {
+  "owner": "Bens-labsss",
+  "weight": 60
+ },
+ "thinkmate": {
+  "owner": "david-labsss",
+  "weight": 60
+ },
+ "topparagonresource": {
+  "owner": "Bens-labsss",
+  "weight": 30
+ },
+ "unixsurplus": {
+  "owner": "Buttler-labss",
+  "weight": 60
+ },
+ "uptimumtech": {
+  "owner": "Adam-labbss",
+  "weight": 120
+ },
+ "usithardware": {
+  "owner": "Adams-anlyto",
+  "weight": 60
+ },
+ "velocitytechsolutions": {
+  "owner": "david-labsss",
+  "weight": 60
+ },
+ "verticalenterprise": {
+  "owner": "Adams-anlyto",
+  "weight": 60
+ },
+ "vibrant": {
+  "owner": "Buttler-labss",
+  "weight": 30
+ },
+ "waterpanther": {
+  "owner": "Adam-lab-maker",
+  "weight": 60
+ },
+ "wearesync": {
+  "owner": "david-labsss",
+  "weight": 90,
+  "wf": "wearesync"
+ },
+ "xsnet": {
+  "owner": "Adam-lab-maker",
+  "weight": 120
+ }
+}

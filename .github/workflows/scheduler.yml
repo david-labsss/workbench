@@ -1,19 +1,13 @@
 name: Scheduler
 
-# ONE scheduler per account, instead of a separate cron in every scraper. At the start of the
-# daily window (06:00 Asia/Karachi = 01:00 UTC) this dispatches every scraper THIS account owns and
-# runs them through the morning. "Owns" = the scraper's job guard carries
-# `github.repository_owner == '<this account>'`, so each account only starts its own sites; the file
-# is identical on every repo but each copy schedules a different set. Heaviest sites are started
-# first so the long ones finish within the window.
+# ONE scheduler per account. At 06:00 Asia/Karachi (01:00 UTC) it reads ops/scrape_schedule.json,
+# takes the sites THIS account owns, and dispatches them spread across the 06:00-12:00 window
+# (heaviest first, a few minutes apart) via ops/dispatch_schedule.py. Most sites run through the
+# shared scrape.yml; a couple keep their own workflow. This replaces the per-site crons: one
+# scheduled workflow per account, no "skipped" scheduled-run flood, load spread through the morning.
 #
-# Why one scheduler and not a cron per site: the per-site crons created a "skipped" scheduled run on
-# every OTHER account for every site every day (one file lives on all repos). This replaces ~130
-# per-site schedules with one. Weekly full runs (gotodirect, servertechcentral-full, aztekc) keep
-# their own weekly cron and are skipped here (they still carry a cron).
-#
-# Resilience: when an account is suspended, scripts/rehome.py rewrites the owner guard of its sites
-# to a living account, and that account's scheduler then starts them -- nothing else to change.
+# Resilience: when an account is suspended, scripts/rehome.py reassigns its sites in
+# scrape_schedule.json (and the few remaining per-site guards) to a living account.
 
 on:
   schedule:
@@ -21,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       only:
-        description: "Comma-separated site keys to dispatch (blank = all this account's daily sites)"
+        description: "Comma-separated site keys to dispatch now (blank = all this account's sites)"
         required: false
         default: ""
 
@@ -36,41 +30,20 @@ concurrency:
 jobs:
   dispatch:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install requests
+        run: pip install requests
+
       - name: Dispatch this account's scrapers
         env:
-          GH_TOKEN: ${{ github.token }}
-          OWNER: ${{ github.repository_owner }}
+          GITHUB_TOKEN: ${{ github.token }}
           ONLY: ${{ inputs.only }}
-        run: |
-          set -u
-          cd .github/workflows
-          if [ -n "${ONLY:-}" ]; then
-            sites=$(echo "$ONLY" | tr ',' ' ')
-          else
-            # Every scraper this account owns that no longer carries its own cron (daily sites),
-            # heaviest first so long jobs start at the top of the window.
-            sites=$(for f in *.yml; do
-              base="${f%.yml}"
-              case "$base" in scheduler|setup-db|update-scrape-status|directmacro-qa) continue;; esac
-              grep -q "repository_owner == '$OWNER'" "$f" || continue
-              grep -qE '^\s*- cron:' "$f" && continue      # weekly fulls self-schedule
-              to=$(grep -oE 'timeout-minutes:[[:space:]]*[0-9]+' "$f" | grep -oE '[0-9]+' | head -1)
-              printf '%06d %s\n' "${to:-60}" "$base"
-            done | sort -rn | awk '{print $2}')
-          fi
-          [ -n "${sites:-}" ] || { echo "no sites to dispatch for $OWNER"; exit 0; }
-          n=0
-          for base in $sites; do
-            if [ ! -f "$base.yml" ]; then echo "::warning::$base.yml not found"; continue; fi
-            if gh workflow run "$base.yml" >/dev/null 2>&1; then
-              echo "dispatched $base"; n=$((n+1))
-            else
-              echo "::warning::could not dispatch $base"
-            fi
-            sleep 45
-          done
-          echo "dispatched $n site(s) for $OWNER"
+        run: python -u ops/dispatch_schedule.py

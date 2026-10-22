@@ -6,6 +6,8 @@ name: QA in a browser
 # judge: US-only prices or stock, bot walls, prices drawn with JavaScript (browserqa/qa.py).
 # Daily an hour after the dashboard's QA (10:30 PKT), on one account; by hand on any.
 on:
+  schedule:
+    - cron: "30 5 * * *"      # 10:30 Asia/Karachi — after the morning scrape window
   workflow_dispatch:
     inputs:
       sites:
