@@ -25,6 +25,8 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import requests
+
 from common import http, schema
 
 PAGE = 1000
@@ -86,15 +88,26 @@ class Store:
         self.site, self.base, self.api = site, base, api
 
     def post(self, path, body):
-        for attempt in range(5):
-            r = http.session().post(f"{self.api}/{path}", json=body, timeout=180)
-            r.raise_for_status()
-            data = r.json()
+        data = None
+        for attempt in range(6):
+            try:
+                r = http.session().post(f"{self.api}/{path}", json=body, timeout=180)
+                r.raise_for_status()
+                data = r.json()
+            except (requests.exceptions.RequestException, ValueError) as e:
+                # The store throttles hard (HTTP 429) and sometimes drops the connection. The shared
+                # session already retries 429/5xx; if it still gives up, back off longer and retry the
+                # whole request rather than crash the whole run.
+                if attempt == 5:
+                    raise
+                print(f"WARN {path} failed ({type(e).__name__}); backoff retry {attempt + 1}/5", flush=True)
+                time.sleep(10 * (attempt + 1))
+                continue
             if data.get("status") == "success":
                 return data["data"]
-            if attempt < 4:
+            if attempt < 5:
                 time.sleep(5 * (attempt + 1))
-        raise RuntimeError(f"{path}: {data.get('msg')}")
+        raise RuntimeError(f"{path}: {(data or {}).get('msg')}")
 
     def total(self, f):
         return self.post("catalogue-search/products", search_body(f))["total"]

@@ -39,6 +39,8 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import requests
+
 from common import bigcommerce, http, runner, schema
 
 SITE = "newtownspares"
@@ -66,10 +68,21 @@ def headers(base):
 
 
 def post(base, head, query, after, first=bigcommerce.PAGE):
-    r = http.session().post(base + "/graphql", headers=head, timeout=60,
-                            json={"query": query, "variables": {"first": first, "after": after}})
-    r.raise_for_status()
-    data = r.json()
+    for attempt in range(5):
+        try:
+            r = http.session().post(base + "/graphql", headers=head, timeout=60,
+                                    json={"query": query, "variables": {"first": first, "after": after}})
+            r.raise_for_status()
+            data = r.json()
+            break
+        except (requests.exceptions.RequestException, ValueError) as e:
+            # A transient drop (ChunkedEncodingError / reset / non-JSON body) part-way through a
+            # ~516k-product run must not abort it: retry the same page. A page that keeps failing
+            # still raises, so it is never mistaken for the end of the list.
+            if attempt == 4:
+                raise
+            print(f"WARN graphql page failed ({type(e).__name__}); retry {attempt + 1}/4", flush=True)
+            time.sleep(3 * (attempt + 1))
     if data.get("errors"):
         raise RuntimeError(f"GraphQL error: {data['errors'][0].get('message')}")
     return data["data"]["site"]["products"]
