@@ -2,8 +2,6 @@ name: Scrape A-Tech Memory
 
 # Started by n8n through the GitHub API (workflow_dispatch), or by hand from the Actions tab.
 on:
-  schedule:
-    - cron: "0 1 * * *"
   workflow_dispatch:
     inputs:
       max_products:

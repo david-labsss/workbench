@@ -2,8 +2,6 @@ name: Scrape NADDOD
 
 # Started by n8n through the GitHub API (workflow_dispatch), or by hand from the Actions tab.
 on:
-  schedule:
-    - cron: "0 2 * * *"
   workflow_dispatch:
     inputs:
       max_products:

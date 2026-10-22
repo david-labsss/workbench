@@ -4,8 +4,6 @@ name: Scrape Servertechcentral
 # the rest forward from the last full run, so it finishes in minutes. The full reconciliation crawl
 # is servertechcentral-full.yml (weekly). Started by n8n/GitHub API or by hand.
 on:
-  schedule:
-    - cron: "15 4 * * *"
   workflow_dispatch:
     inputs:
       max_products:
