@@ -41,20 +41,18 @@ MAX_MISMATCH = 0.1
 MIN_CHECKED = 10
 BLOCKED_STOP = 5
 MISMATCHES = ("price", "stock", "price+stock")
-# Stores priced in another currency (the dashboard's src/lib/currency.ts): their pages and data can
-# round a converted price a unit apart.
-OTHER_CURRENCY = {"avoira", "uptimumtech", "pbtech", "wearesync"}
+# Stores priced in another currency (the dashboard's src/lib/currency.ts): saved and live prices,
+# read in that same currency, can sit a rounding unit apart. insidesystems is read from its Store
+# API in pinned DKK (see STORE_API); the others from their pages.
+OTHER_CURRENCY = {"avoira", "uptimumtech", "pbtech", "wearesync", "insidesystems"}
 CURRENCY_ROUNDING = 0.002
-# Stores whose dollar prices are converted from their own currency at each day's rate and rounded
-# to whole dollars (insidesystems, from Danish krone): a day's rate move shifts them a dollar or so.
-DAILY_RATE = {"insidesystems"}
-DAILY_RATE_MOVE = 0.005
 QUOTE_ONLY = re.compile(r"request (a )?quote|call for pric|contact (us )?for pric|price on request|get a quote|"
                         r"ask for (a )?price|quote only", re.I)
 # Stores whose product pages are cached in whatever currency their first visitor was shown
-# (insidesystems shows each country its own): their price and stock come from their WooCommerce
-# Store API instead, which answers in the visitor's currency - US dollars here, as their scraper reads it.
-STORE_API = {"insidesystems": "https://insidesystems.com"}
+# (insidesystems shows each country its own): price and stock come from their WooCommerce Store API
+# instead. The value is (base URL, the currency the scraper pins and saves): insidesystems pins
+# Danish krone with ?yay-currency=DKK, which the check must ask for too, or a US runner reads dollars.
+STORE_API = {"insidesystems": ("https://insidesystems.com", "DKK")}
 # Stores that show euros to everyone until the visitor picks US dollars in the header, as their
 # scrapers do (Magento + Hyva: its "USD - US Dollar" button posts this form). Their visible price
 # box is what the scraper saves: the page's data keeps a price the box hides ("Get in touch").
@@ -255,17 +253,21 @@ def live_product(page, row, site):
     return {"price": price, "available": availability, "from": source + stock_note}
 
 
-def store_api_product(page, base, row):
-    """The product as the store's WooCommerce Store API gives it now, to a buyer in the US."""
-    response = page.request.get(f"{base}/wp-json/wc/store/v1/products/{row['product_id']}", timeout=60_000)
+def store_api_product(page, base, currency, row):
+    """The product as the store's WooCommerce Store API gives it now, in `currency` - the currency
+    the scraper pins and saves. insidesystems pins DKK with ?yay-currency, overriding the runner's
+    country (a US runner would otherwise be answered in converted dollars that don't match)."""
+    params = {"yay-currency": currency} if currency != "USD" else None
+    response = page.request.get(f"{base}/wp-json/wc/store/v1/products/{row['product_id']}",
+                                params=params, timeout=60_000)
     if response.status == 404:
         raise Unclear("product gone (404)")
     if response.status != 200:
         raise RuntimeError(f"HTTP {response.status}")
     product = response.json()
     prices = product.get("prices") or {}
-    if prices.get("currency_code") != "USD":
-        raise Unclear(f"the store answered in {prices.get('currency_code')}")
+    if prices.get("currency_code") != currency:
+        raise Unclear(f"the store answered in {prices.get('currency_code')}, not {currency}")
     raw = prices.get("price")
     price = int(raw) / 10 ** int(prices.get("currency_minor_unit") or 0) if raw and raw != "0" else None
     return {"price": price, "available": product.get("is_in_stock"), "from": "Store API"}
@@ -314,8 +316,8 @@ def sample_of(conn, site):
 
 
 def check_site(browser, site, run_id, sample):
-    tolerance = CURRENCY_ROUNDING if site in OTHER_CURRENCY else DAILY_RATE_MOVE if site in DAILY_RATE else 0
-    unit = 1.0 if site in DAILY_RATE else 0.01
+    tolerance = CURRENCY_ROUNDING if site in OTHER_CURRENCY else 0
+    unit = 0.01
     context = browser.new_context(locale="en-US", viewport={"width": 1366, "height": 1000})
     page = context.new_page()
     if site in USD_SWITCH:
@@ -324,7 +326,7 @@ def check_site(browser, site, run_id, sample):
     for row in sample:
         live, note = None, None
         try:
-            live = store_api_product(page, STORE_API[site], row) if site in STORE_API else live_product(page, row, site)
+            live = store_api_product(page, *STORE_API[site], row) if site in STORE_API else live_product(page, row, site)
             result = compare(row, live, tolerance, unit)
         except Unclear as e:
             result, note = "unclear", str(e)
