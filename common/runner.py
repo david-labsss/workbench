@@ -21,7 +21,7 @@ import sys
 import time
 from datetime import datetime, timezone
 
-from common import changes, db, schema
+from common import changes, db, master, schema
 
 COLUMNS = schema.PRODUCT_COLUMNS
 COMPLETE = 0.98  # a full run must reach this share of the site's listed product count
@@ -43,11 +43,16 @@ def run(site, scrape):
     scraped_dt = datetime.now(timezone.utc)
     scraped_at = scraped_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
 
-    # Read the previous run before scraping, so bad credentials fail in seconds
+    # snapshot (old way), both (master + snapshot) or master (master only): ops/storage.json
+    storage = master.mode(site)
+    print(f"storage: {storage}", flush=True)
+
+    # Read the previous run before scraping, so bad credentials fail in seconds. The master
+    # modes compare against the master table instead, inside the save.
     previous = {}
     if not dry_run:
         db.check()
-        if full_run:
+        if full_run and storage == "snapshot":
             previous = db.previous_run(site, "product_id", changes.PREVIOUS_COLUMNS)
 
     started = time.time()
@@ -72,6 +77,17 @@ def run(site, scrape):
     if dry_run:
         for row in rows[:5]:
             print(json.dumps(dict(zip(COLUMNS, row)), indent=2, default=str))
+    elif storage != "snapshot":
+        try:
+            result = master.save(site, rows, scraped_dt, len(rows), full_run,
+                                 snapshot=storage == "both")
+        except master.Refused as e:
+            set_output("rows", len(rows))
+            sys.exit(f"Not saved: {e}")
+        except Exception as e:  # noqa: BLE001 - report any database failure
+            set_output("rows", len(rows))
+            sys.exit(f"Saving to the database failed: {e}")
+        set_output("restocked", result["restocked"])
     else:
         prices = changes.find_changes(site, rows, previous, full_run)
         counts = {}
