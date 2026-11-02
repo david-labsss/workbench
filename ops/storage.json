@@ -1,5 +1,0 @@
-{
-  "_comment": "How each site's runs save (common/master.py). snapshot: the old way, every run's full snapshot in the site's table. both: master table + change log, plus the snapshot (switch-over period). master: master table + change log only.",
-  "default": "snapshot",
-  "sites": {}
-}

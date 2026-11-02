@@ -145,21 +145,6 @@ def log_run(site, scraped_at, status, rows, products, full_run, note=""):
         )
 
 
-def log_run_cur(cur, site, scraped_at, run_id, status, rows, products, full_run, note="",
-                counts=None):
-    """log_run on an open cursor, inside the caller's transaction (common/master.py), with
-    the run's new / changed / removed / unchanged counts when given."""
-    counts = counts or {}
-    names = ["site", "scraped_at", "run_id", "status", "rows", "products", "full_run", "note"]
-    values = [site, scraped_at, run_id, status, rows, products, full_run, note]
-    for name, value in counts.items():
-        names.append(name)
-        values.append(value)
-    cur.execute(sql.SQL("INSERT INTO scrape_runs ({}) VALUES ({})").format(
-        sql.SQL(", ").join(sql.Identifier(n) for n in names),
-        sql.SQL(", ").join(sql.Placeholder() for _ in names)), values)
-
-
 def save_run(site, rows, scraped_at, products, full_run):
     """INSERT the snapshot (rows in PRODUCT_COLUMNS order) into the site's table and log the
     run. Returns an error message, or None if it worked. Never raises, so the run can still
