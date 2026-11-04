@@ -26,4 +26,5 @@ jobs:
       - name: Scraper health
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          READER_DATABASE_URL: ${{ secrets.READER_DATABASE_URL }}
         run: python -u ops/health_check.py

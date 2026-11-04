@@ -36,7 +36,9 @@ def set_output(name, value):
             f.write(f"{name}={value}\n")
 
 
-def run(site, scrape):
+def run(site, scrape, min_of_previous=None):
+    """min_of_previous: for a site whose own count can't be trusted, the share of the last full
+    run's products a full run must reach (None = don't compare)."""
     limit = int(os.getenv("MAX_PRODUCTS") or 0)
     dry_run = os.getenv("DRY_RUN") == "1"
     full_run = not limit
@@ -63,6 +65,10 @@ def run(site, scrape):
     if full_run and listed and len(rows) < COMPLETE * listed:
         sys.exit(f"Only scraped {len(rows)} of {listed} products ({len(rows) / listed:.0%}); "
                  "not saving a partial snapshot")
+    if min_of_previous and len(rows) < min_of_previous * len(previous):
+        sys.exit(f"Only scraped {len(rows)} products, the last full run had {len(previous)}; "
+                 "not saving a partial snapshot (if the store really shrank, lower "
+                 f"min_of_previous in {site}/scrape.py for one run)")
 
     for c in REPORT_COLUMNS:
         filled = sum(1 for r in rows if r[COLUMNS.index(c)] not in ("", None))
