@@ -119,12 +119,22 @@ def run(site, scrape, min_of_previous=None, needs_previous=False):
             set_output("restocked", result["restocked"])
         else:
             fallback = fallback or "unknown error"
-            print(f"WARNING: master table storage could not save this run ({fallback}). "
-                  f"Saving it the old way (snapshot) instead; the master table stays behind "
-                  f"until SELECT seed_master('{site}') is run.", flush=True)
-            # the old way compares with the last run in the site's own table
-            previous = (db.previous_run(site, "product_id", changes.PREVIOUS_COLUMNS)
-                        if full_run else {})
+            try:
+                committed = db.run_saved(site, scraped_dt)
+            except Exception:  # noqa: BLE001 - can't tell: try the old way (it reports errors)
+                committed = False
+            if committed:
+                # the master save's COMMIT went through, only its reply was lost
+                print(f"WARNING: master table storage reported an error ({fallback}), but the "
+                      f"run is saved; not saving it again.", flush=True)
+                fallback = None
+            else:
+                print(f"WARNING: master table storage could not save this run ({fallback}). "
+                      f"Saving it the old way (snapshot) instead; the master table stays behind "
+                      f"until SELECT seed_master('{site}') is run.", flush=True)
+                # the old way compares with the last run in the site's own table
+                previous = (db.previous_run(site, "product_id", changes.PREVIOUS_COLUMNS)
+                            if full_run else {})
     if not dry_run and (storage == "snapshot" or fallback):
         prices = changes.find_changes(site, rows, previous, full_run)
         counts = {}
@@ -133,7 +143,9 @@ def run(site, scrape, min_of_previous=None, needs_previous=False):
             counts[change] = counts.get(change, 0) + 1
         restocked = schema.restocked_count(prices)
         print(f"{len(prices)} changes {counts}, {restocked} back in stock", flush=True)
-        db_error = db.save_run(site, rows, scraped_dt, len(rows), full_run)
+        # a fallback run is marked in scrape_runs, so it is visible (not a plain old-way run)
+        note = f"storage fallback: {fallback}"[:500] if fallback else ""
+        db_error = db.save_run(site, rows, scraped_dt, len(rows), full_run, note)
         db_error = db_error or db.save_prices(prices, scraped_dt, full_run)
         set_output("restocked", restocked)
         if db_error:

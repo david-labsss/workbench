@@ -163,6 +163,16 @@ def log_run(site, scraped_at, status, rows, products, full_run, note=""):
         )
 
 
+def run_saved(site, scraped_at):
+    """True if this run (this site, this exact scrape time) is already logged as saved. The
+    fallback in common/runner.py checks it: a master save whose COMMIT went through but whose
+    connection then broke must not be saved a second time the old way."""
+    with connect() as conn:
+        return conn.execute(
+            "SELECT 1 FROM scrape_runs WHERE site = %s AND scraped_at = %s AND status = 'saved' "
+            "LIMIT 1", (site, scraped_at)).fetchone() is not None
+
+
 def last_run_rows(site):
     """How many rows the site's last saved full run had, or 0 if it has none. The master storage
     modes don't read the last run's rows, so the 90% rule (min_of_previous in common/runner.py)
@@ -189,13 +199,13 @@ def log_run_cur(cur, site, scraped_at, run_id, status, rows, products, full_run,
         sql.SQL(", ").join(sql.Placeholder() for _ in names)), values)
 
 
-def save_run(site, rows, scraped_at, products, full_run):
+def save_run(site, rows, scraped_at, products, full_run, note=""):
     """INSERT the snapshot (rows in PRODUCT_COLUMNS order) into the site's table and log the
-    run. Returns an error message, or None if it worked. Never raises, so the run can still
-    report what happened."""
+    run (with note, e.g. why the master table storage fell back). Returns an error message, or
+    None if it worked. Never raises, so the run can still report what happened."""
     try:
         insert_rows(site, PRODUCT_COLUMNS, rows, scraped_at, full_run)
-        log_run(site, scraped_at, "saved", len(rows), products, full_run)
+        log_run(site, scraped_at, "saved", len(rows), products, full_run, note)
         return None
     except Exception as e:  # noqa: BLE001 - report any database failure, keep the run going
         print(f"ERROR database save failed: {e}", flush=True)
