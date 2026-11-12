@@ -96,21 +96,36 @@ def run(site, scrape, min_of_previous=None, needs_previous=False):
     in_stock = sum(1 for r in rows
                    if str(r[COLUMNS.index("available")]).strip().lower() in db.TRUE_VALUES)
 
+    # If the master table can't take this run (not at the site's last saved run, or any error),
+    # the run is saved the old way instead, so it is never lost. The master table then stays
+    # behind (every later run of the site falls back too) until SELECT seed_master('<site>').
+    fallback = None
     if dry_run:
         for row in rows[:5]:
             print(json.dumps(dict(zip(COLUMNS, row)), indent=2, default=str))
     elif storage != "snapshot":
+        result = None
         try:
             result = master.save(site, rows, scraped_dt, len(rows), full_run,
                                  snapshot=storage == "both")
+        except master.NotSynced as e:
+            fallback = str(e)
         except master.Refused as e:
             set_output("rows", len(rows))
             sys.exit(f"Not saved: {e}")
-        except Exception as e:  # noqa: BLE001 - report any database failure
-            set_output("rows", len(rows))
-            sys.exit(f"Saving to the database failed: {e}")
-        set_output("restocked", result["restocked"])
-    else:
+        except Exception as e:  # noqa: BLE001 - any master failure: save the old way instead
+            fallback = f"{type(e).__name__}: {e}"
+        if result is not None:
+            set_output("restocked", result["restocked"])
+        else:
+            fallback = fallback or "unknown error"
+            print(f"WARNING: master table storage could not save this run ({fallback}). "
+                  f"Saving it the old way (snapshot) instead; the master table stays behind "
+                  f"until SELECT seed_master('{site}') is run.", flush=True)
+            # the old way compares with the last run in the site's own table
+            previous = (db.previous_run(site, "product_id", changes.PREVIOUS_COLUMNS)
+                        if full_run else {})
+    if not dry_run and (storage == "snapshot" or fallback):
         prices = changes.find_changes(site, rows, previous, full_run)
         counts = {}
         for p in prices:

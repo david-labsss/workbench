@@ -63,6 +63,11 @@ class Refused(Exception):
     """The run looks wrong; nothing was saved."""
 
 
+class NotSynced(Refused):
+    """The master table is not at the site's last saved run (it needs seed_master()); nothing
+    was saved. common/runner.py then saves the run the old way, so the run is not lost."""
+
+
 def config():
     try:
         with open(CONFIG) as f:
@@ -125,15 +130,18 @@ def save(site, rows, scraped_dt, products, full_run, snapshot):
         synced = cur.execute("SELECT run_id FROM master_sync WHERE website = %s",
                              (site,)).fetchone()
         if last and (not synced or synced[0] != last[2]):
-            raise Refused(f"the master table is not at {site}'s last saved run "
-                          f"({last[2]}); run SELECT seed_master('{site}') first")
+            raise NotSynced(f"the master table is not at {site}'s last saved run "
+                            f"({last[2]}); run SELECT seed_master('{site}') first")
 
-        # This run in a temp table, typed like the product tables
+        # This run in a temp table, typed like the product tables. A product without an id
+        # can't be keyed in the master table: it stays in the snapshot only (as the old way).
+        pid = cols.index("product_id")
+        keyed = [r for r in converted if r[pid] is not None]
         cur.execute(sql.SQL("CREATE TEMP TABLE cur ({}) ON COMMIT DROP").format(
             sql.SQL(", ").join(sql.SQL("{} {}").format(
                 sql.Identifier(c), sql.SQL(db.column_type(c).replace(" NOT NULL", "")))
                 for c in cols)))
-        _copy(cur, "cur", cols, converted)
+        _copy(cur, "cur", cols, keyed)
         cur.execute("ALTER TABLE cur ADD PRIMARY KEY (product_id)")
         cur.execute("ANALYZE cur")
 
@@ -166,7 +174,7 @@ def save(site, rows, scraped_dt, products, full_run, snapshot):
         listed_before = cur.execute(
             sql.SQL("SELECT count(*) FROM {} WHERE website = %s AND listed").format(
                 sql.Identifier(TABLE)), (site,)).fetchone()[0]
-        compare_listing = len(rows) >= COMPARE_LISTING * listed_before
+        compare_listing = len(keyed) >= COMPARE_LISTING * listed_before
 
         # Change log rows (the same rules as common/changes.py)
         log_cols = schema.PRICE_COLUMNS + [n for n, _ in LOG_EXTRA] + ["run_id", "full_run"]
@@ -193,18 +201,20 @@ def save(site, rows, scraped_dt, products, full_run, snapshot):
             return sql.SQL(", ").join(out)
 
         # 1. new and returning products: back_in_stock when seen before and in stock now,
-        #    otherwise new (as common/changes.py)
+        #    otherwise new (as common/changes.py). A site's first saved run logs nothing (as
+        #    common/changes.py, which has no previous run to compare with).
         logged = []
-        cur.execute(sql.SQL("""
-            INSERT INTO prices ({cols})
-            SELECT {sel} FROM cur c JOIN diff d USING (product_id)
-            WHERE d.is_new OR d.is_returning RETURNING change, restocked""").format(
-            cols=_ident(log_cols),
-            sel=log_select(sql.SQL("CASE WHEN d.is_returning AND coalesce(c.available, false) "
-                                   "THEN 'back_in_stock' ELSE 'new' END"),
-                           sql.SQL("NULL::numeric"), sql.SQL("NULL::numeric"),
-                           sql.SQL("NULL::boolean"))))
-        logged += cur.fetchall()
+        if last:
+            cur.execute(sql.SQL("""
+                INSERT INTO prices ({cols})
+                SELECT {sel} FROM cur c JOIN diff d USING (product_id)
+                WHERE d.is_new OR d.is_returning RETURNING change, restocked""").format(
+                cols=_ident(log_cols),
+                sel=log_select(sql.SQL("CASE WHEN d.is_returning AND coalesce(c.available, false) "
+                                       "THEN 'back_in_stock' ELSE 'new' END"),
+                               sql.SQL("NULL::numeric"), sql.SQL("NULL::numeric"),
+                               sql.SQL("NULL::boolean"))))
+            logged += cur.fetchall()
         # 2. tracked changes on listed products
         cur.execute(sql.SQL("""
             INSERT INTO prices ({cols})
@@ -316,7 +326,7 @@ def save(site, rows, scraped_dt, products, full_run, snapshot):
             changes[change] = changes.get(change, 0) + 1
         restocked = sum(1 for _, r in logged if r)
         counts = {"new": new + returning, "changed": changed, "removed": removed,
-                  "unchanged": len(rows) - new - returning - changed}
+                  "unchanged": len(keyed) - new - returning - changed}
 
         if snapshot:
             _copy(cur, site, cols + ["run_id", "full_run"],
