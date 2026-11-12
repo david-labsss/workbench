@@ -135,6 +135,24 @@ def previous_run(site, key, columns):
     return previous
 
 
+def previous_from_master(site, key, columns):
+    """previous_run() for the master storage modes ("both", "master"): the site's listed products
+    from the master table (common/master.py), which holds exactly its last saved full run. In
+    "master" mode the site's own table gets no new rows, so it would only hold the run before the
+    switch."""
+    names = [key] + [c for c in columns if c != key]
+    with connect() as conn:
+        cur = conn.execute(
+            sql.SQL("SELECT {} FROM products WHERE website = %s AND listed").format(
+                sql.SQL(", ").join(sql.Identifier(n) for n in names)), (site,))
+        previous = {}
+        for row in cur:
+            values = dict(zip(names, (_as_text(v) for v in row)))
+            previous[values[key]] = values
+    print(f"previous full run (master table): {len(previous)} rows", flush=True)
+    return previous
+
+
 def log_run(site, scraped_at, status, rows, products, full_run, note=""):
     run_id = os.getenv("GITHUB_RUN_ID", "local")
     with connect() as conn:
@@ -143,6 +161,32 @@ def log_run(site, scraped_at, status, rows, products, full_run, note=""):
             " note) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
             (site, scraped_at, run_id, status, rows, products, full_run, note),
         )
+
+
+def last_run_rows(site):
+    """How many rows the site's last saved full run had, or 0 if it has none. The master storage
+    modes don't read the last run's rows, so the 90% rule (min_of_previous in common/runner.py)
+    compares with this count there."""
+    with connect() as conn:
+        last = conn.execute(
+            "SELECT rows FROM scrape_runs WHERE site = %s AND full_run AND status = 'saved' "
+            "ORDER BY logged_at DESC LIMIT 1", (site,)).fetchone()
+    return int(last[0] or 0) if last else 0
+
+
+def log_run_cur(cur, site, scraped_at, run_id, status, rows, products, full_run, note="",
+                counts=None):
+    """log_run on an open cursor, inside the caller's transaction (common/master.py), with
+    the run's new / changed / removed / unchanged counts when given."""
+    counts = counts or {}
+    names = ["site", "scraped_at", "run_id", "status", "rows", "products", "full_run", "note"]
+    values = [site, scraped_at, run_id, status, rows, products, full_run, note]
+    for name, value in counts.items():
+        names.append(name)
+        values.append(value)
+    cur.execute(sql.SQL("INSERT INTO scrape_runs ({}) VALUES ({})").format(
+        sql.SQL(", ").join(sql.Identifier(n) for n in names),
+        sql.SQL(", ").join(sql.Placeholder() for _ in names)), values)
 
 
 def save_run(site, rows, scraped_at, products, full_run):

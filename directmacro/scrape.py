@@ -10,10 +10,9 @@ Every run covers the whole catalog:
   1. Tags: SKU-only lookups per brand and per spec value (capacity, interface, ...). GraphQL
      can filter by these attributes but doesn't return them on the product itself.
   2. Main sweep: title, price, stock, category, ... 1,000 products per page.
-  3. Changes against the previous full run: rows whose price or availability changed, and the
-     products that came back in stock.
-Rows are INSERTed into the "directmacro" table (common/db.py), changes into the shared
-prices table (website = directmacro). Columns: common/schema.py.
+common/runner.py checks the run, saves it into the "directmacro" table and logs the changes against
+the previous full run into the shared prices table (common/changes.py), the same way as every
+other site. Columns: common/schema.py.
 
 Env vars:
   DATABASE_URL                 Postgres URL for the scraper_writer role
@@ -27,18 +26,16 @@ import math
 import os
 import random
 import re
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime, timezone
 import threading
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from common import db, schema
+from common import runner, schema
 
 BASE = "https://directmacro.com"
 GRAPHQL = f"{BASE}/graphql"
@@ -339,13 +336,6 @@ def sweep_tags(pool, planner, bases, labels, spec_attrs):
 
 # ---------------------------------------------------------------- rows
 
-def to_float(value):
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def capacity_tb(text):
     m = CAPACITY_RE.search(text or "")
     if not m:
@@ -461,49 +451,6 @@ def build_row(item, condition, tags, spec_labels, scraped_at, product_id=None,
     return schema.product_row(row)
 
 
-# ---------------------------------------------------------------- changes
-
-def same_number(a, b):
-    return to_float(a) == to_float(b)
-
-
-def find_changes(rows, previous):
-    """Every price / availability change against the previous full run, as prices rows
-    (common/schema.py). previous is {product_id: {column: text}} from db.previous_run()."""
-    # A first run (or one after a test run) would log every product as "new"
-    log_new = len(previous) >= 0.5 * len(rows)
-    prices = []
-    for r in rows:
-        product = schema.as_dict(r)
-        before = previous.get(product["product_id"])
-        if before is None:
-            if not log_new:
-                continue
-            change, old_price = schema.NEW, ""
-        else:
-            old_price = before.get("price", "")
-            changed = []
-            if not same_number(old_price, product["price"]):
-                changed.append(schema.PRICE)
-            if before.get("available", "").upper() != str(product["available"]).upper():
-                changed.append(schema.BACK_IN_STOCK if product["available"] is True
-                               else schema.OUT_OF_STOCK)
-            if not changed:
-                continue
-            change = "+".join(changed)
-        prices.append(schema.price_row(product, change, old_price))
-    print(f"{len(prices)} changes, {schema.restocked_count(prices)} back in stock"
-          + ("" if log_new else " (first full run: new products not logged)"), flush=True)
-    return prices
-
-
-def set_output(name, value):
-    path = os.getenv("GITHUB_OUTPUT")
-    if path:
-        with open(path, "a") as f:
-            f.write(f"{name}={value}\n")
-
-
 # ---------------------------------------------------------------- main sweep
 
 def page_jobs(leaf):
@@ -548,19 +495,10 @@ def fetch_page_batch(batch):
         for leaf, page, size in batch])
 
 
-def main():
-    limit = int(os.getenv("MAX_PRODUCTS") or 0)
+def scrape(limit, scraped_at):
+    """The whole catalog as rows (variants included)."""
     workers = int(os.getenv("WORKERS") or 4)
-    dry_run = os.getenv("DRY_RUN") == "1"
-    scraped_dt = datetime.now(timezone.utc)
-    scraped_at = scraped_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
     started = time.time()
-
-    # Read the previous run before scraping, so bad credentials fail in seconds
-    previous = {}
-    if not dry_run:
-        db.check()
-        previous = db.previous_run(SITE, "product_id", ["price", "available"])
 
     pool = ThreadPoolExecutor(workers)
     try:
@@ -659,20 +597,12 @@ def main():
         print(f"  {c}: filled in {filled}/{len(rows)} rows", flush=True)
     print(f"runtime: {time.time() - started:.0f}s", flush=True)
 
-    if dry_run:
-        for row in random.Random(1).sample(rows, min(4, len(rows))):
-            print(json.dumps(dict(zip(COLUMNS, row)), indent=2))
-    db_error = None
-    if not dry_run:
-        db_error = db.save_run(SITE, rows, scraped_dt, total, full_run=not limit)
-        prices = find_changes(rows, previous)
-        set_output("restocked", schema.restocked_count(prices))
-        db_error = db_error or db.save_prices(prices, scraped_dt, full_run=not limit)
-    set_output("rows", len(rows))
-    set_output("products", total)
-    set_output("in_stock", in_stock)
-    if db_error:
-        sys.exit(f"Saving to the database failed: {db_error}")
+    return rows, None
+
+
+def main():
+    """The whole run: scrape, check, save (common/runner.py). directmacro/click.py calls it too."""
+    runner.run(SITE, scrape)
 
 
 if __name__ == "__main__":

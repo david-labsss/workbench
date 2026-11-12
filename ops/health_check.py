@@ -43,6 +43,20 @@ def days_since(d, today):
     return (today - datetime.date(y, m, dd)).days
 
 
+# Tables with run_id and scraped_at that are not a site's own table
+NOT_SITES = ("prices", "qa_checks", "scrape_runs", "listing_events", "field_changes", "products",
+             "master_sync", "run_misses")
+
+
+def master_runs(conn):
+    """{site: last saved run's time} for sites saved to the master table (common/master.py), or {}
+    when there is none or this login can't read it."""
+    try:
+        return dict(conn.execute("SELECT website, scraped_at FROM master_sync").fetchall())
+    except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
+        return {}
+
+
 def sweep(conn):
     cur = conn.cursor()
     cur.execute("""SELECT table_name::text, array_agg(column_name::text)
@@ -50,22 +64,28 @@ def sweep(conn):
                    GROUP BY table_name""")
     cols = {t: set(c) for t, c in cur.fetchall()}
     tables = sorted(t for t, cs in cols.items()
-                    if {"run_id", "scraped_at"} <= cs
-                    and t not in ("prices", "qa_checks", "scrape_runs", "listing_events"))
+                    if {"run_id", "scraped_at"} <= cs and t not in NOT_SITES)
+    synced = master_runs(conn)
     rep = {}
     for t in tables:
         cur.execute(f'SELECT max(scraped_at) FROM "{t}"')
         mx = cur.fetchone()[0]
+        fields = [c for c in ("price", "image_url", "description") if c in cols[t]]
+        sel = ", ".join(["count(*)"] + [f"count({c})" for c in fields])
+        # In "master" storage the site's own table gets no new rows: its last run is the master
+        # table's listed products. In "both" both hold the same run, so the site's table is read.
+        if t in synced and (not mx or synced[t] > mx):
+            mx = synced[t]
+            cur.execute(f"SELECT {sel} FROM products WHERE website=%s AND listed", (t,))
+        elif mx:
+            cur.execute(f'SELECT run_id FROM "{t}" WHERE scraped_at=%s LIMIT 1', (mx,))
+            rid = cur.fetchone()[0]
+            cur.execute(f'SELECT {sel} FROM "{t}" WHERE run_id=%s', (rid,))
         info = {"last": str(mx)[:10] if mx else None}
         if not mx:
             info["rows"] = 0
             rep[t] = info
             continue
-        cur.execute(f'SELECT run_id FROM "{t}" WHERE scraped_at=%s LIMIT 1', (mx,))
-        rid = cur.fetchone()[0]
-        fields = [c for c in ("price", "image_url", "description") if c in cols[t]]
-        sel = ["count(*)"] + [f"count({c})" for c in fields]
-        cur.execute(f'SELECT {", ".join(sel)} FROM "{t}" WHERE run_id=%s', (rid,))
         row = cur.fetchone()
         n = row[0]
         info["rows"] = n

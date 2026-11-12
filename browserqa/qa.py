@@ -312,7 +312,16 @@ def sample_of(conn, site):
     cur = conn.execute(f'SELECT product_id, sku, part_number, url, price, available FROM "{site}" '
                        "WHERE run_id = %s AND full_run ORDER BY random() LIMIT %s", (last[0], SAMPLE))
     names = [c.name for c in cur.description]
-    return last[0], [dict(zip(names, r)) for r in cur]
+    sample = [dict(zip(names, r)) for r in cur]
+    if not sample:
+        # "master" storage (common/master.py) saves no rows to the site's table: when the master
+        # table is at that run, its listed products are the run
+        cur = conn.execute(
+            "SELECT p.product_id, p.sku, p.part_number, p.url, p.price, p.available "
+            "FROM products p JOIN master_sync m ON m.website = p.website AND m.run_id = %s "
+            "WHERE p.website = %s AND p.listed ORDER BY random() LIMIT %s", (last[0], site, SAMPLE))
+        sample = [dict(zip(names, r)) for r in cur]
+    return last[0], sample
 
 
 def check_site(browser, site, run_id, sample):

@@ -15,14 +15,14 @@ Fields the API gives per product: title, price, list_price, quantity, product_co
 Stock: the search lists ONLY in-stock products, and "quantity" is 1 for all of them (checked
 2026-10-09: no listed product has 0 or 2+). It's an in-stock flag, and the store publishes no
 exact counts anywhere, so stock_qty stays blank. Stock changes show up as products leaving the
-list (out_of_stock) or rejoining it (back_in_stock -> Restocked), see find_changes().
+list (out_of_stock) or rejoining it (back_in_stock -> Restocked), as common/changes.py logs them.
 brand / condition / capacity / model are parsed from the (very spec-rich) title.
 category is derived from title keywords (the search API does not expose per-product
 breadcrumb categories).
 
-Every run's rows are INSERTed into the "serverorbit" table (common/db.py), changes against the
-previous full run into the shared prices table (website = serverorbit). Columns:
-common/schema.py (the API's list_price is compare_at_price).
+common/runner.py checks the run, saves it into the "serverorbit" table and logs the changes against
+the previous full run into the shared prices table (common/changes.py), the same way as every
+other site. Columns: common/schema.py. The API's list_price is compare_at_price.
 
 Env vars:
   DATABASE_URL                 Postgres URL for the scraper_writer role
@@ -30,18 +30,16 @@ Env vars:
   MAX_PRODUCTS                 optional, stop after N products (test runs)
   DRY_RUN                      optional, "1" = print sample rows, don't save anything
 """
-import json
 import os
 import re
 import sys
 import time
-from datetime import datetime, timezone
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from common import db, schema
+from common import runner, schema
 
 API = "https://searchserverapi.com/getresults"
 API_KEY = os.getenv("SEARCHANISE_API_KEY", "1D2R1g8S8q")
@@ -52,9 +50,6 @@ USER_AGENT = "serverorbit-scraper/1.0 (price monitoring)"
 
 SITE = "serverorbit"
 COLUMNS = schema.PRODUCT_COLUMNS
-# Columns read back from the previous run (enough for an out_of_stock prices row)
-PREVIOUS_COLUMNS = ["sku", "part_number", "model_number", "title", "brand", "category",
-                    "condition", "price", "stock_qty", "available", "url"]
 
 # --- title parsing -----------------------------------------------------------
 BRANDS = [
@@ -260,117 +255,15 @@ def map_item(it, scraped_at):
     return schema.product_row(row)
 
 
-# --- changes -----------------------------------------------------------------
-def same_num(a, b):
-    return _to_float(a) == _to_float(b)
-
-
-def seen_before(product_ids):
-    """Product ids that were in an earlier full run (the database keeps every run)."""
-    if not product_ids:
-        return set()
-    try:
-        with db.connect() as conn:
-            found = conn.execute(
-                "SELECT DISTINCT product_id FROM serverorbit WHERE full_run AND product_id = ANY(%s)",
-                (list(product_ids),)).fetchall()
-        return {r[0] for r in found}
-    except Exception as e:  # noqa: BLE001 - without the database, a return looks like "new"
-        print(f"WARN can't check earlier runs, logging reappearing products as new: {e}", flush=True)
-        return set()
-
-
-def find_changes(rows, previous, scraped_at, full_run):
-    """ServerOrbit's search lists only in-stock products, so stock changes show up as products
-    leaving or rejoining the list:
-      listed last run, gone now           -> out_of_stock (or removed from the store)
-      not listed last run, seen earlier   -> back_in_stock (restocked)
-      never seen before                   -> new
-      listed both times, different price  -> price
-    Must run before this run's snapshot is saved to the database.
-    Returns prices rows (common/schema.py)."""
-    current = {r[COLUMNS.index("product_id")]: schema.as_dict(r) for r in rows}
-    # Only compare listings against a full previous snapshot (not after a test run)
-    compare_listing = len(previous) >= 0.9 * len(current)
-    returning = seen_before([p for p in current if p not in previous]) if compare_listing else set()
-
-    prices = []
-    for pid, product in current.items():
-        before = previous.get(pid)
-        if before is None:
-            if previous and not compare_listing:
-                continue
-            change, old_price = (schema.BACK_IN_STOCK if pid in returning else schema.NEW), ""
-        elif not same_num(before.get("price"), product["price"]):
-            change, old_price = schema.PRICE, before.get("price", "")
-        else:
-            continue
-        prices.append(schema.price_row(product, change, old_price))
-
-    if full_run and compare_listing:
-        for pid, before in previous.items():
-            if pid not in current:
-                prices.append(schema.price_row(
-                    dict(before, website=SITE), schema.OUT_OF_STOCK, before.get("price", ""),
-                    available=False, stock_qty=""))
-    return prices
-
-
-def set_output(name, value):
-    path = os.getenv("GITHUB_OUTPUT")
-    if path:
-        with open(path, "a") as f:
-            f.write(f"{name}={value}\n")
-
-
-def main():
-    limit = int(os.getenv("MAX_PRODUCTS") or 0)
-    dry_run = os.getenv("DRY_RUN") == "1"
-    scraped_dt = datetime.now(timezone.utc)
-    scraped_at = scraped_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
-
-    # Read the previous run before scraping, so bad credentials fail in seconds
-    previous = {}
-    if not dry_run:
-        db.check()
-        previous = db.previous_run(SITE, "product_id", PREVIOUS_COLUMNS)
-
+# --- run ---------------------------------------------------------------------
+def scrape(limit, scraped_at):
+    """The listed (in-stock) catalogue as rows, and the total the API reports."""
     items, total_reported = fetch_all(limit)
     print(f"fetched {len(items)} unique products (API reported total {total_reported})", flush=True)
     if not items:
         sys.exit("No products returned by the search API")
-    # Never save a partial snapshot as if it were the full catalogue.
-    if not limit and total_reported and len(items) < 0.98 * total_reported:
-        sys.exit(f"Only fetched {len(items)} of {total_reported} products "
-                 f"({len(items) / total_reported:.0%}); not saving a partial snapshot")
-
-    rows = [map_item(it, scraped_at) for it in items]
-    for c in ("sku", "brand", "category", "condition", "capacity", "price", "stock_qty"):
-        filled = sum(1 for r in rows if r[COLUMNS.index(c)] not in ("", None))
-        print(f"  {c}: filled in {filled}/{len(rows)} rows", flush=True)
-
-    if dry_run:
-        for row in rows[:5]:
-            print(json.dumps(dict(zip(COLUMNS, row)), indent=2))
-    db_error = None
-    if not dry_run:
-        # Changes first: spotting returning products needs the database before today is added
-        prices = find_changes(rows, previous, scraped_at, full_run=not limit)
-        db_error = db.save_run(SITE, rows, scraped_dt, len(items), full_run=not limit)
-        counts = {}
-        for p in prices:
-            change = p[schema.PRICE_COLUMNS.index("change")]
-            counts[change] = counts.get(change, 0) + 1
-        restocked = schema.restocked_count(prices)
-        print(f"{len(prices)} changes {counts}, {restocked} back in stock", flush=True)
-        set_output("restocked", restocked)
-        db_error = db_error or db.save_prices(prices, scraped_dt, full_run=not limit)
-    set_output("rows", len(rows))
-    set_output("products", len(items))
-    set_output("in_stock", sum(1 for r in rows if r[COLUMNS.index("available")] == "Yes"))
-    if db_error:
-        sys.exit(f"Saving to the database failed: {db_error}")
+    return [map_item(it, scraped_at) for it in items], total_reported
 
 
 if __name__ == "__main__":
-    main()
+    runner.run(SITE, scrape)

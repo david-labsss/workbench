@@ -14,16 +14,13 @@ Products are deduped by id, and the total is checked against the collection's pr
 Fields: title, vendor (brand), product type (category), SKU, price, compare-at price,
 availableForSale. Part number = SKU, or the first word of the title (titles start with it).
 Prices are the US market's (@inContext(country: US)), which the store pages show: 5% above
-the base price the API returns without a context. Runs before BASE_PRICES_UNTIL saved the base
-price, so the first run after the switch compares against it +5% instead of logging every
-product as a price change.
+the base price the API returns without a context.
 The store doesn't publish stock counts to the API (quantityAvailable is access-denied), so
 stock_qty stays blank and available is the in-stock flag.
 
-Changes are found against the previous full run in the database: new products, price changes,
-out_of_stock / back_in_stock (availability flips, or a product leaving / rejoining the listing).
-They go to the shared prices table (website = orangehardwares); back_in_stock rows are
-restocked. Columns: common/schema.py.
+common/runner.py checks the run, saves it into the "orangehardwares" table and logs the changes against
+the previous full run into the shared prices table (common/changes.py), the same way as every
+other site. Columns: common/schema.py.
 
 Env vars:
   DATABASE_URL                 Postgres URL for the scraper_writer role
@@ -31,7 +28,6 @@ Env vars:
   MAX_PRODUCTS                 optional, stop after about N products (test runs)
   DRY_RUN                      optional, "1" = print sample rows, don't write anything
 """
-import json
 import os
 import re
 import sys
@@ -39,13 +35,12 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from common import db, schema
+from common import runner, schema
 
 SITE = "orangehardwares"
 BASE = "https://www.orangehardwares.com"
@@ -56,15 +51,9 @@ PAGE = 250                      # max per request
 CAP = 25000                     # Shopify won't page deeper than this per listing
 WORKERS = 6
 FIRST_YEAR = 2023               # oldest product was created 2023-12-04
-# Runs scraped before this saved base prices, not US prices (the last one: 2026-10-14 04:00)
-BASE_PRICES_UNTIL = datetime(2026, 10, 14, 12, tzinfo=timezone.utc)
-US_MARKUP = Decimal("1.05")     # the US market's price adjustment on the base price
 USER_AGENT = "orangehardwares-scraper/1.0 (price monitoring)"
 
 COLUMNS = schema.PRODUCT_COLUMNS
-# Columns read back from the previous run (enough for an out_of_stock prices row)
-PREVIOUS_COLUMNS = ["sku", "part_number", "title", "brand", "category", "condition", "price",
-                    "stock_qty", "available", "url", "scraped_at"]
 
 PRODUCT_FIELDS = """
   id title handle vendor productType availableForSale featuredImage { url } descriptionHtml
@@ -241,92 +230,9 @@ def map_item(n, scraped_at):
     return schema.product_row(row)
 
 
-# --- changes -----------------------------------------------------------------
-def seen_before(product_ids):
-    if not product_ids:
-        return set()
-    with db.connect() as conn:
-        found = conn.execute(
-            "SELECT DISTINCT product_id FROM orangehardwares WHERE full_run AND product_id = ANY(%s)",
-            (list(product_ids),)).fetchall()
-    return {r[0] for r in found}
-
-
-def previous_price(before):
-    """The previous run's price as text, in US prices: a run from before the switch saved the
-    base price, so it gets the US adjustment (+5%, rounded to the cent like the store does)."""
-    price = before.get("price", "")
-    try:
-        scraped = datetime.fromisoformat(before.get("scraped_at", ""))
-        if scraped.tzinfo is None:
-            scraped = scraped.replace(tzinfo=timezone.utc)
-        if not price or scraped >= BASE_PRICES_UNTIL:
-            return price
-        us = (Decimal(price) * US_MARKUP).quantize(Decimal("0.01"), ROUND_HALF_UP)
-    except (ValueError, InvalidOperation):
-        return price
-    return format(us.normalize(), "f")
-
-
-def find_changes(rows, previous, scraped_at, full_run):
-    """Compare with the previous full run ({product_id: {column: text}} from
-    db.previous_run(), available as TRUE / FALSE). Must run before this run is saved.
-    Returns prices rows (common/schema.py)."""
-    current = {r[COLUMNS.index("product_id")]: schema.as_dict(r) for r in rows}
-    # Only compare listings against a full previous snapshot, and only on full runs
-    compare_listing = full_run and len(previous) >= 0.9 * len(current)
-    returning = seen_before([p for p in current if p not in previous]) if compare_listing else set()
-
-    prices = []
-    for pid, product in current.items():
-        before = previous.get(pid)
-        now_in = product["available"] == "Yes"
-        old_price = previous_price(before) if before else ""
-        if before is None:
-            if not compare_listing:
-                continue
-            change = schema.BACK_IN_STOCK if pid in returning and now_in else schema.NEW
-        elif before["available"] == "FALSE" and now_in:
-            change = schema.BACK_IN_STOCK
-        elif before["available"] == "TRUE" and not now_in:
-            change = schema.OUT_OF_STOCK
-        elif _to_float(old_price) != _to_float(product["price"]):
-            change = schema.PRICE
-        else:
-            continue
-        prices.append(schema.price_row(product, change, old_price))
-
-    if compare_listing:
-        for pid, before in previous.items():
-            if pid not in current and before["available"] == "TRUE":
-                was = previous_price(before)
-                prices.append(schema.price_row(
-                    dict(before, website=SITE, price=was), schema.OUT_OF_STOCK, was,
-                    available=False))
-    return prices
-
-
-def set_output(name, value):
-    path = os.getenv("GITHUB_OUTPUT")
-    if path:
-        with open(path, "a") as f:
-            f.write(f"{name}={value}\n")
-
-
-def main():
-    limit = int(os.getenv("MAX_PRODUCTS") or 0)
-    dry_run = os.getenv("DRY_RUN") == "1"
-    full_run = not limit
-    scraped_dt = datetime.now(timezone.utc)
-    scraped_at = scraped_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
-
-    # Read the previous run before scraping, so bad credentials fail in seconds
-    previous = {}
-    if not dry_run:
-        db.check()
-        if full_run:
-            previous = db.previous_run(SITE, "product_id", PREVIOUS_COLUMNS)
-
+# --- run ---------------------------------------------------------------------
+def scrape(limit, scraped_at):
+    """The whole catalogue as rows, and the collection's product count."""
     started = time.time()
     items = fetch_all(limit)
     total = listed_total()
@@ -334,38 +240,8 @@ def main():
           f"(collection lists {total})", flush=True)
     if not items:
         sys.exit("No products returned by the Storefront API")
-    # Never save a partial snapshot as if it were the full catalogue
-    if not limit and total and len(items) < 0.98 * total:
-        sys.exit(f"Only fetched {len(items)} of {total} products ({len(items) / total:.0%}); "
-                 "not saving a partial snapshot")
-
-    rows = [map_item(n, scraped_at) for n in items]
-    for c in ("sku", "part_number", "brand", "category", "condition", "capacity", "price"):
-        filled = sum(1 for r in rows if r[COLUMNS.index(c)] not in ("", None))
-        print(f"  {c}: filled in {filled}/{len(rows)} rows", flush=True)
-    in_stock = sum(1 for r in rows if r[COLUMNS.index("available")] == "Yes")
-
-    if dry_run:
-        for row in rows[:5]:
-            print(json.dumps(dict(zip(COLUMNS, row)), indent=2))
-    else:
-        prices = find_changes(rows, previous, scraped_at, full_run)
-        counts = {}
-        for p in prices:
-            change = p[schema.PRICE_COLUMNS.index("change")]
-            counts[change] = counts.get(change, 0) + 1
-        restocked = schema.restocked_count(prices)
-        print(f"{len(prices)} changes {counts}, {restocked} back in stock", flush=True)
-        db_error = db.save_run(SITE, rows, scraped_dt, len(items), full_run)
-        db_error = db_error or db.save_prices(prices, scraped_dt, full_run)
-        set_output("restocked", restocked)
-        if db_error:
-            set_output("rows", len(rows))
-            sys.exit(f"Saving to the database failed: {db_error}")
-    set_output("rows", len(rows))
-    set_output("products", len(items))
-    set_output("in_stock", in_stock)
+    return [map_item(n, scraped_at) for n in items], total
 
 
 if __name__ == "__main__":
-    main()
+    runner.run(SITE, scrape)

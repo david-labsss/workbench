@@ -5,9 +5,9 @@ Every run covers the whole catalog (~17.6k products) in two steps:
      and the specs table (model / part number, capacity, ...) embedded in each description.
   2. ?view=stock for in-stock products only (~700 requests): exact stock count. Sold-out
      products are 0.
-Rows are INSERTed into the "serverpartdeals" table (common/db.py); changes against the previous
-full run go to the shared prices table (website = serverpartdeals). Columns:
-common/schema.py.
+common/runner.py checks the run, saves it into the "serverpartdeals" table and logs the changes against
+the previous full run into the shared prices table (common/changes.py), the same way as every
+other site. Columns: common/schema.py.
 
 Env vars:
   DATABASE_URL                 Postgres URL for the scraper_writer role
@@ -15,21 +15,19 @@ Env vars:
   WORKERS                      optional, stock requests in parallel (default 2)
   DRY_RUN                      optional, "1" = print sample rows, don't save anything
 """
-import json
 import os
 import re
 import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
 
 import requests
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from common import db, schema
+from common import runner, schema
 
 SITE = "serverpartdeals"
 BASE = "https://serverpartdeals.com"
@@ -43,7 +41,6 @@ CATALOG_DELAY = 2.0  # seconds between /products.json pages
 STOCK_DELAY = 1.0  # seconds each worker waits after a stock request
 MAX_CONSECUTIVE_FAILURES = 20  # site is blocking us: stop stock requests, keep what we have
 
-COLUMNS = schema.PRODUCT_COLUMNS
 
 # Spec table label (lowercase) -> column
 SPEC_ALIASES = {
@@ -267,104 +264,35 @@ def build_rows(product, stock_by_variant, scraped_at, prev_by_id):
     return rows
 
 
-# ---------------------------------------------------------------- changes
+# ---------------------------------------------------------------- run
 
-def same_number(a, b):
-    return to_float(a) == to_float(b)
-
-
-def find_changes(rows, previous):
-    """Changes against the previous full run, as prices rows (common/schema.py).
-    previous is {product_id: {column: text}} from db.previous_run()."""
-    prices = []
-    for r in rows:
-        product = schema.as_dict(r)
-        before = previous.get(product["product_id"])
-        if before is None:
-            change, old_price = schema.NEW, ""
-        else:
-            old_price = before.get("price", "")
-            changed = []
-            if not same_number(old_price, product["price"]):
-                changed.append(schema.PRICE)
-            if not same_number(before.get("stock_qty"), product["stock_qty"]):
-                changed.append(schema.STOCK)
-            was_available = before.get("available", "").upper() == "TRUE"
-            if was_available != product["available"]:
-                changed.append(schema.BACK_IN_STOCK if product["available"]
-                               else schema.OUT_OF_STOCK)
-            if not changed:
-                continue
-            change = "+".join(changed)
-        prices.append(schema.price_row(product, change, old_price))
-    print(f"{len(prices)} changes, {schema.restocked_count(prices)} back in stock", flush=True)
-    return prices
-
-
-def set_output(name, value):
-    path = os.getenv("GITHUB_OUTPUT")
-    if path:
-        with open(path, "a") as f:
-            f.write(f"{name}={value}\n")
-
-
-def main():
-    limit = int(os.getenv("MAX_PRODUCTS") or 0)
+def scrape(limit, scraped_at, previous):
+    """The whole catalog as rows. previous (the last full run) keeps the last known stock count
+    of a product whose stock request failed."""
     workers = int(os.getenv("WORKERS") or 2)
-    dry_run = os.getenv("DRY_RUN") == "1"
-    scraped_dt = datetime.now(timezone.utc)
-    scraped_at = scraped_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
-
-    # Read the previous run before scraping, so bad credentials fail in seconds
-    previous = {}
-    if not dry_run:
-        db.check()
-        previous = db.previous_run(SITE, "product_id", ["price", "stock_qty", "available"])
 
     # Step 1: whole catalog with specs
     catalog = fetch_catalog(limit)
     if not catalog:
         sys.exit("No products returned by /products.json")
-    stock = {}  # product id -> fresh {variant_id: qty}
-
-    def all_rows():
-        rows = []
-        for product in catalog:
-            rows.extend(build_rows(product, stock.get(product["id"]), scraped_at, previous))
-        return rows
 
     # Step 2: exact stock for in-stock products only
     in_stock = [p for p in catalog if any(v.get("available") for v in p.get("variants", []))]
     print(f"fetching stock for {len(in_stock)} in-stock products with {workers} workers...",
           flush=True)
+    stock = {}  # product id -> fresh {variant_id: qty}
     with ThreadPoolExecutor(workers) as pool:
         for p, s in zip(in_stock, pool.map(fetch_stock, in_stock)):
             if s is not None:
                 stock[p["id"]] = s
     print(f"stock: {len(stock)} ok, {len(in_stock) - len(stock)} not fetched", flush=True)
 
-    rows = all_rows()
-    print(f"built {len(rows)} rows", flush=True)
-    for c in ("model_number", "part_number", "condition", "capacity", "price_per_tb", "stock_qty"):
-        filled = sum(1 for r in rows if r[COLUMNS.index(c)] != "")
-        print(f"  {c}: filled in {filled}/{len(rows)} rows", flush=True)
-
-    if dry_run:
-        avail = [r for r in rows if r[COLUMNS.index("available")] is True]
-        for row in (avail[:3] + rows[:2]):
-            print(json.dumps(dict(zip(COLUMNS, row)), indent=2))
-    db_error = None
-    if not dry_run:
-        db_error = db.save_run(SITE, rows, scraped_dt, len(catalog), full_run=not limit)
-        prices = find_changes(rows, previous)
-        set_output("restocked", schema.restocked_count(prices))
-        db_error = db_error or db.save_prices(prices, scraped_dt, full_run=not limit)
-    set_output("rows", len(rows))
-    set_output("products", len(catalog))
-    set_output("in_stock", len(in_stock))
-    if db_error:
-        sys.exit(f"Saving to the database failed: {db_error}")
+    rows = []
+    for product in catalog:
+        rows.extend(build_rows(product, stock.get(product["id"]), scraped_at, previous))
+    print(f"built {len(rows)} rows from {len(catalog)} products", flush=True)
+    return rows, None
 
 
 if __name__ == "__main__":
-    main()
+    runner.run(SITE, scrape, needs_previous=True)
