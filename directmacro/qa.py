@@ -24,6 +24,7 @@ import time
 from urllib.parse import unquote, urlparse
 
 import psycopg
+from psycopg import sql
 
 from common import db
 from directmacro.scrape import SITE, gql
@@ -116,9 +117,10 @@ def main():
         if not saved:
             print(f"QA skipped: run {run_id} is not a saved full run of {SITE}", flush=True)
             return
-        cur = conn.execute(
-            f"SELECT product_id, url, price, available FROM {SITE} "
-            "WHERE run_id = %s AND full_run ORDER BY random() LIMIT %s", (run_id, SAMPLE))
+        # the run's rows: in the site's own table, or on "master" storage in the master table
+        cur = conn.execute(sql.SQL(
+            "SELECT product_id, url, price, available FROM {} r ORDER BY random() LIMIT %s").format(
+            db.run_rows(conn, SITE, run_id)), (SAMPLE,))
         names = [c.name for c in cur.description]
         sample = [dict(zip(names, r)) for r in cur]
 

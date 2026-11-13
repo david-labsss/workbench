@@ -60,9 +60,8 @@ def run(site, scrape, min_of_previous=None, needs_previous=False):
     if not dry_run:
         db.check()
         if (full_run and storage == "snapshot") or needs_previous:
-            # the master modes keep the last run in the master table, not the site's own table
-            read = db.previous_run if storage == "snapshot" else db.previous_from_master
-            previous = read(site, "product_id", changes.PREVIOUS_COLUMNS)
+            # from the site's own table, or the master table where the run is only there
+            previous = db.previous_run(site, "product_id", changes.PREVIOUS_COLUMNS)
     # The last full run's size, for min_of_previous. The master modes don't read the last run's
     # rows, so they take its row count from scrape_runs; without it the rule would compare with 0
     # and let any run through.
@@ -132,7 +131,8 @@ def run(site, scrape, min_of_previous=None, needs_previous=False):
                 print(f"WARNING: master table storage could not save this run ({fallback}). "
                       f"Saving it the old way (snapshot) instead; the master table stays behind "
                       f"until SELECT seed_master('{site}') is run.", flush=True)
-                # the old way compares with the last run in the site's own table
+                # the old way compares with the last saved run: in the site's own table, or on
+                # "master" storage in the master table (db.previous_run finds it)
                 previous = (db.previous_run(site, "product_id", changes.PREVIOUS_COLUMNS)
                             if full_run else {})
     if not dry_run and (storage == "snapshot" or fallback):

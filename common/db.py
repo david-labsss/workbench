@@ -111,45 +111,49 @@ def _as_text(value):
     return str(value)
 
 
+def run_rows(conn, site, run_id):
+    """SQL FROM-item: the rows of the site's saved full run `run_id`, wherever they are. The
+    site's own table has them on "snapshot" and "both" storage, and for a run the fallback in
+    common/runner.py saved the old way. On "master" storage the own table gets no new rows: the
+    master table (common/master.py) holds the site's latest run as its listed products. Use as
+    SELECT <columns> FROM <run_rows(...)> r. Every store table has an index on run_id."""
+    own = conn.execute(
+        sql.SQL("SELECT EXISTS (SELECT 1 FROM {} WHERE run_id = %s)").format(sql.Identifier(site)),
+        (run_id,)).fetchone()[0]
+    if own:
+        return sql.SQL("(SELECT * FROM {} WHERE run_id = {} AND full_run)").format(
+            sql.Identifier(site), sql.Literal(run_id))
+    return sql.SQL("(SELECT * FROM products WHERE website = {} AND listed)").format(
+        sql.Literal(site))
+
+
+def last_full_run(conn, site):
+    """The site's last saved full run's run_id, or None."""
+    last = conn.execute(
+        "SELECT run_id FROM scrape_runs WHERE site = %s AND full_run AND status = 'saved' "
+        "ORDER BY logged_at DESC LIMIT 1", (site,)).fetchone()
+    return last[0] if last else None
+
+
 def previous_run(site, key, columns):
-    """The last saved full run's rows from the site's table as {key value: {column: text}},
-    or {} if there is none. Read before this run is saved, so "previous" is never today's own
+    """The last saved full run's rows as {key value: {column: text}}, or {} if there is none:
+    from the site's own table, or from the master table where the run is only there ("master"
+    storage; see run_rows). Read before this run is saved, so "previous" is never today's own
     snapshot."""
-    table = site
     names = [key] + [c for c in columns if c != key]
     with connect() as conn:
-        last = conn.execute(
-            "SELECT run_id FROM scrape_runs WHERE site = %s AND full_run AND status = 'saved' "
-            "ORDER BY logged_at DESC LIMIT 1", (site,)).fetchone()
-        if not last:
+        run_id = last_full_run(conn, site)
+        if not run_id:
             return {}
-        cur = conn.execute(
-            sql.SQL("SELECT {} FROM {} WHERE run_id = %s AND full_run").format(
-                sql.SQL(", ").join(sql.Identifier(n) for n in names), sql.Identifier(table)),
-            (last[0],))
+        source = run_rows(conn, site, run_id)
+        cur = conn.execute(sql.SQL("SELECT {} FROM {} r").format(
+            sql.SQL(", ").join(sql.Identifier(n) for n in names), source))
         previous = {}
         for row in cur:
             values = dict(zip(names, (_as_text(v) for v in row)))
             previous[values[key]] = values
-    print(f"previous full run (run {last[0]}): {len(previous)} rows", flush=True)
-    return previous
-
-
-def previous_from_master(site, key, columns):
-    """previous_run() for the master storage modes ("both", "master"): the site's listed products
-    from the master table (common/master.py), which holds exactly its last saved full run. In
-    "master" mode the site's own table gets no new rows, so it would only hold the run before the
-    switch."""
-    names = [key] + [c for c in columns if c != key]
-    with connect() as conn:
-        cur = conn.execute(
-            sql.SQL("SELECT {} FROM products WHERE website = %s AND listed").format(
-                sql.SQL(", ").join(sql.Identifier(n) for n in names)), (site,))
-        previous = {}
-        for row in cur:
-            values = dict(zip(names, (_as_text(v) for v in row)))
-            previous[values[key]] = values
-    print(f"previous full run (master table): {len(previous)} rows", flush=True)
+        where = "master table" if "FROM products" in source.as_string(conn) else "own table"
+    print(f"previous full run (run {run_id}, {where}): {len(previous)} rows", flush=True)
     return previous
 
 

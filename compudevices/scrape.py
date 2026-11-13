@@ -63,10 +63,10 @@ def part_numbers():
             "WHERE full_run AND status = 'saved' AND site = ANY(%s) "
             "ORDER BY site, logged_at DESC", (SITES,)).fetchall())
         own_run = runs.pop(SITE, None)
+        # each site's latest run: in its own table, or on "master" storage in the master table
         values = sql.SQL(" UNION ALL ").join(
-            sql.SQL("SELECT {} AS site, v FROM {}, unnest(ARRAY[part_number, model_number]) v "
-                    "WHERE run_id = {}").format(sql.Literal(site), sql.Identifier(site),
-                                                sql.Literal(run_id))
+            sql.SQL("SELECT {} AS site, v FROM {} r, unnest(ARRAY[r.part_number, r.model_number]) v"
+                    ).format(sql.Literal(site), db.run_rows(conn, site, run_id))
             for site, run_id in runs.items())
         # Each in the spelling most rows use: the store's search needs the dashes
         wanted = conn.execute(sql.SQL(
@@ -77,8 +77,8 @@ def part_numbers():
             "ORDER BY count(DISTINCT site) DESC, k").format(
             values, sql.Literal(MIN_LENGTH), sql.Literal(MIN_SITES))).fetchall()
         found = conn.execute(
-            sql.SQL("SELECT DISTINCT part_number FROM {} WHERE run_id = %s").format(
-                sql.Identifier(SITE)), (own_run,)).fetchall() if own_run else []
+            sql.SQL("SELECT DISTINCT part_number FROM {} r").format(
+                db.run_rows(conn, SITE, own_run))).fetchall() if own_run else []
     todo = {k: pn for pn, k in wanted}
     kept = 0
     for (pn,) in found:

@@ -66,6 +66,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from bs4 import BeautifulSoup
+from psycopg import sql
 
 from common import db, http, runner, schema
 
@@ -324,8 +325,9 @@ def previous_full_run():
             return {}, None
         run_id, scraped = last
         cols = ", ".join(f'"{c}"' for c in COLUMNS)
-        cur = conn.execute(
-            f'SELECT {cols} FROM "{SITE}" WHERE run_id = %s AND full_run', (run_id,))
+        # the run's rows: in the site's own table, or on "master" storage in the master table
+        cur = conn.execute(sql.SQL("SELECT {} FROM {} r").format(
+            sql.SQL(cols), db.run_rows(conn, SITE, run_id)))
         prev = {}
         for row in cur:
             d = {c: _as_text(v) for c, v in zip(COLUMNS, row)}
