@@ -8,10 +8,14 @@ name: Scheduler
 #
 # Resilience: when an account is suspended, scripts/rehome.py reassigns its sites in
 # scrape_schedule.json (and the few remaining per-site guards) to a living account.
+#
+# A second run at 17:00 Asia/Karachi dispatches only the sites with "slot": "evening" in
+# scrape_schedule.json (our own store, read after the US IT pricing job has changed its prices).
 
 on:
   schedule:
-    - cron: "0 1 * * *"      # 06:00 Asia/Karachi
+    - cron: "0 1 * * *"      # 06:00 Asia/Karachi: the morning sites
+    - cron: "0 12 * * *"     # 17:00 Asia/Karachi: the evening sites
   workflow_dispatch:
     inputs:
       only:
@@ -46,4 +50,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           ONLY: ${{ inputs.only }}
+          SLOT: ${{ github.event.schedule == '0 12 * * *' && 'evening' || 'morning' }}
         run: python -u ops/dispatch_schedule.py

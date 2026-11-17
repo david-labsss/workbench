@@ -494,7 +494,8 @@
  },
  "usithardware": {
   "owner": "Adams-anlyto",
-  "weight": 60
+  "weight": 60,
+  "slot": "evening"
  },
  "velocitytechsolutions": {
   "owner": "david-labsss",
