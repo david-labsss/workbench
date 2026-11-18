@@ -43,9 +43,36 @@ n = len(mine)
 if not n:
     print(f"no {SLOT} sites for {OWNER}" if not ONLY else f"no sites for {OWNER}")
     raise SystemExit(0)
-gap = min(MAX_GAP, WINDOW_SEC // n)
 hdr = {"Authorization": f"Bearer {TOKEN}", "Accept": "application/vnd.github+json",
        "X-GitHub-Api-Version": "2022-11-28"}
+
+
+def started_today(site):
+    """A scrape.yml run of this site started since 07:00 UTC today and did not fail (queued, running or done).
+
+    2026-11-18 (Shahzaib's call, user's go): the US IT pricing job starts our store's read itself the moment its run
+    has written (usit-daily-prices lib/store-read.mjs, about 14:20-15:30 PKT), so the 17:00 PKT evening slot is only
+    the backup: it skips a site that was already read that day. If GitHub cannot be asked, the read goes ahead."""
+    since = time.strftime("%Y-%m-%dT07:00:00Z", time.gmtime())
+    url = f"https://api.github.com/repos/{REPO}/actions/workflows/scrape.yml/runs"
+    try:
+        r = requests.get(url, headers=hdr, params={"created": f">={since}", "per_page": 100}, timeout=30)
+        runs = r.json().get("workflow_runs", []) if r.status_code == 200 else []
+    except (requests.RequestException, ValueError):
+        return False
+    return any(x.get("display_title") == f"Scrape {site}" and x.get("conclusion") in (None, "success") for x in runs)
+
+
+if SLOT == "evening" and not ONLY:
+    before = len(mine)
+    mine = [(s, v) for s, v in mine if not (v.get("wf", "scrape") == "scrape" and started_today(s))]
+    if len(mine) < before:
+        print(f"{before - len(mine)} evening site(s) already read today (the pricing run started them): skipped")
+    n = len(mine)
+    if not n:
+        print(f"no {SLOT} sites left for {OWNER}")
+        raise SystemExit(0)
+gap = min(MAX_GAP, WINDOW_SEC // n)
 
 print(f"{OWNER}: {n} sites, {gap // 60} min apart")
 for i, (site, v) in enumerate(mine):
