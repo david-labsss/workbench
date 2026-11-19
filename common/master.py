@@ -9,17 +9,17 @@
                and unchanged.
   listing_events  one row each time a product joins or leaves a site's listing, with its
                values then. Insert only.
-  field_changes   one row per field a product changed, other than price, stock and
-               availability (the change log keeps those; a blank <-> "no" availability, which
-               the change log treats alike, is kept here): its old and new value. So nothing
-               the master table overwrites is lost. Insert only.
+  field_changes   one row per field a product changed (price, stock and availability too):
+               its old and new value. So nothing the master table overwrites is lost. Insert
+               only.
   run_misses   the listed products a partial run (under 90% of the listing) did not see. They
                stay listed, as in common/changes.py; this only lets that run be rebuilt.
 
 master_run(site, run) in the database (db/setup.py) gives any run since the site's last
 seed_master(): its listing from listing_events minus run_misses, and each value from the first
-change after the run (field_changes, the change log's old_* values, a removal's listing_events
-row), else the master row. Runs before the seed are in the site's own table, which
+change after the run (field_changes; before a site's convert_history(), the change log's old_*
+values and a removal's listing_events row for price, stock and availability), else the master
+row. convert_history() writes the runs from before the seed into the same history. Runs before the seed are in the site's own table, which
 seed_master() needs anyway: it builds the master from it, and a re-seed overwrites master rows
 without logging them. product_last_seen(site, product) gives when a run last found a product
 (a product row's scraped_at is when it last changed, not when it was last seen).
@@ -268,15 +268,11 @@ def save(site, rows, scraped_dt, products, full_run, snapshot):
             missed = cur.rowcount
 
         # 4a. field history: before the master row is updated, every value a changed or returning
-        #     product is about to lose, field by field (compared typed, stored as text). The
-        #     change log treats a blank and a "no" availability alike, so a change between those
-        #     two is kept here too.
+        #     product is about to lose, field by field (compared typed, stored as text), price,
+        #     stock and availability included: this is the history master_rebuild() reads
         fields = sql.SQL(", ").join(
-            [sql.SQL("({}, p.{}::text, c.{}::text, p.{} IS DISTINCT FROM c.{})").format(
-                sql.Literal(col), *[sql.Identifier(col)] * 4) for col in HISTORY_COLUMNS]
-            + [sql.SQL("('available', p.available::text, c.available::text, "
-                       "p.available IS DISTINCT FROM c.available "
-                       "AND coalesce(p.available, false) = coalesce(c.available, false))")])
+            sql.SQL("({}, p.{}::text, c.{}::text, p.{} IS DISTINCT FROM c.{})").format(
+                sql.Literal(col), *[sql.Identifier(col)] * 4) for col in VALUE_COLUMNS)
         cur.execute(sql.SQL("""
             INSERT INTO field_changes (website, product_id, scraped_at, run_id, field, old_value,
                                        new_value)

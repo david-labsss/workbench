@@ -115,10 +115,18 @@ def master_storage_sql():
         "scraped_at timestamptz NOT NULL, run_id text, PRIMARY KEY (website, scraped_at, product_id))",
         "CREATE INDEX IF NOT EXISTS prices_website_product_scraped_idx "
         "ON prices (website, product_id, scraped_at)",
+        # the change list (change_log) by store and time
+        "CREATE INDEX IF NOT EXISTS field_changes_website_scraped_idx "
+        "ON field_changes (website, scraped_at)",
+        "CREATE INDEX IF NOT EXISTS listing_events_website_scraped_idx "
+        "ON listing_events (website, scraped_at)",
     ]
     stmts += [f"ALTER TABLE prices ADD COLUMN IF NOT EXISTS {n} {t}" for n, t in master.LOG_EXTRA]
     stmts += [f"ALTER TABLE scrape_runs ADD COLUMN IF NOT EXISTS {n} integer"
               for n in master.RUN_COUNTS]
+    # set by convert_history(): the site's first converted run; from then on its whole history
+    # is in the master history
+    stmts.append("ALTER TABLE master_sync ADD COLUMN IF NOT EXISTS history_from timestamptz")
 
     # seed_master(site): the master table at the site's last saved full run, from the site's own
     # table: every product it ever had, with its latest values, listed when in that run. Steps of
@@ -195,9 +203,12 @@ $f$""".replace("@VALS_ARRAY@", vals_array).replace("@VALS@", ", ".join(_q(c) for
     # master_rebuild(site, run): one saved full run, rebuilt from the master table. Listing: the
     # products whose latest listing_events row at that time says listed, minus the ones a partial
     # run missed (run_misses). Values: each field from the FIRST change after the run (its old
-    # value), else the master row: field_changes for the plain fields; for price, stock and
-    # availability the change log's old_* values or a removal's listing_events row (and a
-    # blank <-> "no" availability from field_changes, when earlier).
+    # value), else the master row.
+    #   A converted site (convert_history() set master_sync.history_from): every field's changes,
+    #   price, stock and availability too, are in field_changes.
+    #   Before that: field_changes for the plain fields; for price, stock and availability the
+    #   change log's old_* values or a removal's listing_events row (and a blank <-> "no"
+    #   availability from field_changes, when earlier).
     pivot = ",\n            ".join(
         f"bool_or(fc.field = '{c}') AS {_q('has_' + c)}, "
         f"max(fc.old_value) FILTER (WHERE fc.field = '{c}') AS {_q('old_' + c)}"
@@ -215,6 +226,13 @@ $f$""".replace("@VALS_ARRAY@", vals_array).replace("@VALS@", ", ".join(_q(c) for
                          "WHEN ev.product_id IS NOT NULL THEN ev.available ELSE m.available END")
         else:  # price, stock_qty
             exprs.append(f"CASE WHEN ev.product_id IS NOT NULL THEN ev.{_q(c)} ELSE m.{_q(c)} END")
+    # converted sites: every value column from field_changes
+    pivot_all = ",\n            ".join(
+        f"bool_or(fc.field = '{c}') AS {_q('has_' + c)}, "
+        f"max(fc.old_value) FILTER (WHERE fc.field = '{c}') AS {_q('old_' + c)}" for c in vals)
+    exprs_all = [f"CASE WHEN fcp.{_q('has_' + c)} THEN fcp.{_q('old_' + c)}::{column_type(c)} "
+                 f"ELSE m.{_q(c)} END" for c in vals]
+    nl = "," + chr(10) + "           "
     stmts.append(f"""
 CREATE OR REPLACE FUNCTION master_rebuild(site text, run text) RETURNS TABLE ({returns})
 LANGUAGE plpgsql STABLE AS $f$
@@ -226,6 +244,32 @@ BEGIN
      WHERE r.site = master_rebuild.site AND r.run_id = master_rebuild.run AND r.full_run
        AND r.status = 'saved' ORDER BY r.logged_at DESC LIMIT 1;
     IF run_at IS NULL THEN
+        RETURN;
+    END IF;
+    IF EXISTS (SELECT 1 FROM master_sync s WHERE s.website = master_rebuild.site
+               AND s.history_from IS NOT NULL) THEN
+        RETURN QUERY
+        WITH listed AS (
+            SELECT DISTINCT ON (e.product_id) e.product_id, e.listed FROM listing_events e
+            WHERE e.website = master_rebuild.site AND e.scraped_at <= run_at
+            ORDER BY e.product_id, e.scraped_at DESC),
+        fc AS (
+            SELECT DISTINCT ON (f.product_id, f.field) f.product_id, f.field, f.old_value
+            FROM field_changes f WHERE f.website = master_rebuild.site AND f.scraped_at > run_at
+            ORDER BY f.product_id, f.field, f.scraped_at, f.id),
+        fcp AS (
+            SELECT fc.product_id,
+            {pivot_all}
+            FROM fc GROUP BY fc.product_id)
+        SELECT run_at, m.website, m.product_id,
+               {nl.join(exprs_all)},
+               master_rebuild.run, true
+        FROM products m
+        JOIN listed l ON l.product_id = m.product_id AND l.listed
+        LEFT JOIN fcp ON fcp.product_id = m.product_id
+        WHERE m.website = master_rebuild.site
+          AND NOT EXISTS (SELECT 1 FROM run_misses r WHERE r.website = m.website
+                          AND r.product_id = m.product_id AND r.scraped_at = run_at);
         RETURN;
     END IF;
     RETURN QUERY
@@ -253,7 +297,7 @@ BEGIN
             WHERE e.website = master_rebuild.site AND e.scraped_at > run_at AND NOT e.listed) x
         ORDER BY x.product_id, x.scraped_at, x.src, x.id)
     SELECT run_at, m.website, m.product_id,
-           {(','+chr(10)+'           ').join(exprs)},
+           {nl.join(exprs)},
            master_rebuild.run, true
     FROM products m
     JOIN listed l ON l.product_id = m.product_id AND l.listed
@@ -264,6 +308,314 @@ BEGIN
                       AND r.product_id = m.product_id AND r.scraped_at = run_at);
 END
 $f$""")
+
+    # master_product_runs(site, product): one product of a converted site in every saved full run
+    # that had it, as master_rebuild() gives it, for a product's history without rebuilding whole
+    # runs. Empty for a site that isn't converted yet.
+    stmts.append(f"""
+CREATE OR REPLACE FUNCTION master_product_runs(site text, product text) RETURNS TABLE ({returns})
+LANGUAGE plpgsql STABLE AS $f$
+#variable_conflict use_column
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM master_sync s WHERE s.website = master_product_runs.site
+                   AND s.history_from IS NOT NULL) THEN
+        RETURN;
+    END IF;
+    RETURN QUERY
+    WITH runs AS (
+        SELECT DISTINCT ON (r.run_id) r.run_id, r.scraped_at AS run_at FROM scrape_runs r
+        WHERE r.site = master_product_runs.site AND r.full_run AND r.status = 'saved'
+        ORDER BY r.run_id, r.logged_at DESC),
+    les AS MATERIALIZED (
+        SELECT e.scraped_at, e.listed FROM listing_events e
+        WHERE e.website = master_product_runs.site AND e.product_id = master_product_runs.product),
+    fcs AS MATERIALIZED (
+        SELECT f.field, f.old_value, f.scraped_at, f.id FROM field_changes f
+        WHERE f.website = master_product_runs.site AND f.product_id = master_product_runs.product)
+    SELECT runs.run_at, m.website, m.product_id,
+           {nl.join(exprs_all)},
+           runs.run_id, true
+    FROM runs
+    JOIN products m ON m.website = master_product_runs.site
+                   AND m.product_id = master_product_runs.product
+    CROSS JOIN LATERAL (SELECT les.listed FROM les WHERE les.scraped_at <= runs.run_at
+                        ORDER BY les.scraped_at DESC LIMIT 1) l
+    LEFT JOIN LATERAL (
+        SELECT {pivot_all}
+        FROM (SELECT DISTINCT ON (fcs.field) fcs.field, fcs.old_value FROM fcs
+              WHERE fcs.scraped_at > runs.run_at ORDER BY fcs.field, fcs.scraped_at, fcs.id) fc
+        ) fcp ON true
+    WHERE l.listed
+      AND NOT EXISTS (SELECT 1 FROM run_misses r WHERE r.website = m.website
+                      AND r.product_id = m.product_id AND r.scraped_at = runs.run_at)
+    ORDER BY runs.run_at;
+END
+$f$""")
+
+    # convert_history(site): the site's history written as master history, so master_rebuild()
+    # gives every past run exactly from products + listing_events + field_changes + run_misses,
+    # and the site's own table and the prices table can go. The runs in the site's own table up
+    # to the master table's latest seed are replayed in order, as the master way saves a run:
+    # each against every product's last values so far (a temp table): products joining the
+    # listing (new, or back after being gone) and leaving it (listing_events), and every field a
+    # product seen before changed, price, stock and availability included (field_changes). Run by
+    # run, so the site's table is read once, each run's rows together (no lookups by product).
+    # Then the master table's own log since the seed: the price, stock and availability changes
+    # it kept only in prices, and those of products coming back (listing_events holds their
+    # values). Sets master_sync.history_from; from then on master_rebuild() reads only the
+    # master history for the site. Re-running adds nothing twice.
+    col_types = ", ".join(f"'{column_type(c).replace(' NOT NULL', '')}'" for c in vals)
+    stmts.append("""
+CREATE OR REPLACE FUNCTION convert_history(site text) RETURNS text LANGUAGE plpgsql AS $f$
+DECLARE
+    mf timestamptz; n_runs int; first_at timestamptz; picks text; coldefs text; changes text;
+    differ text; set_list text; rr record; got bigint;
+    n_appear bigint := 0; n_gone bigint := 0; n_fields bigint := 0; n_log bigint; n_back bigint;
+BEGIN
+    PERFORM pg_advisory_xact_lock(hashtextextended('scrape:' || site, 0));
+    -- the latest seed: a time with a listing event for every product known then
+    SELECT e.scraped_at INTO mf FROM (
+        SELECT scraped_at, count(*) AS n FROM listing_events WHERE website = site GROUP BY 1) e
+     WHERE e.n >= (SELECT count(*) FROM products p WHERE p.website = site
+                   AND p.first_seen_at <= e.scraped_at)
+     ORDER BY e.scraped_at DESC LIMIT 1;
+    IF mf IS NULL THEN
+        RAISE EXCEPTION 'no master table seed for %', site;
+    END IF;
+    -- the runs to convert: saved full runs up to the seed that the site's own table holds
+    DROP TABLE IF EXISTS conv_runs;
+    EXECUTE format($q$
+        CREATE TEMP TABLE conv_runs AS
+        SELECT run_id, run_at, row_number() OVER (ORDER BY run_at)::int AS rn FROM (
+            SELECT DISTINCT ON (r.run_id) r.run_id, r.scraped_at AS run_at FROM scrape_runs r
+            WHERE r.site = %L AND r.status = 'saved' AND r.full_run AND r.scraped_at <= %L
+            ORDER BY r.run_id, r.logged_at DESC) x
+        WHERE EXISTS (SELECT 1 FROM %I t WHERE t.run_id = x.run_id AND t.full_run)
+        $q$, site, mf, site);
+    SELECT count(*), min(run_at) INTO n_runs, first_at FROM conv_runs;
+    IF NOT EXISTS (SELECT 1 FROM conv_runs WHERE run_at = mf) THEN
+        RAISE EXCEPTION 'the seed run of % (%) is not in its own table', site, mf;
+    END IF;
+    -- the value columns as the site's table has them (NULL where it hasn't got one), their
+    -- definitions, each field's old (s, the product's last values) and new (c, this run) value as
+    -- text, whether any differs, and the update to the last values
+    SELECT string_agg(CASE WHEN EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_schema = 'public' AND table_name = site AND column_name = c)
+                      THEN format('t.%I', c) ELSE format('NULL::%s', ty) END || format(' AS %I', c), ', ' ORDER BY ord),
+           string_agg(format('%I %s', c, ty), ', ' ORDER BY ord),
+           string_agg(format('(%L, s.%I::text, c.%I::text)', c, c, c), ', ' ORDER BY ord),
+           format('(%s) IS DISTINCT FROM (%s)', string_agg(format('s.%I::text', c), ', ' ORDER BY ord),
+                  string_agg(format('c.%I::text', c), ', ' ORDER BY ord)),
+           string_agg(format('%I = c.%I', c, c), ', ' ORDER BY ord)
+      INTO picks, coldefs, changes, differ, set_list
+      FROM unnest(ARRAY[@VALS_ARRAY@], ARRAY[@COL_TYPES@]) WITH ORDINALITY AS u(c, ty, ord);
+    DROP TABLE IF EXISTS conv_state;
+    EXECUTE format('CREATE TEMP TABLE conv_state (product_id text PRIMARY KEY, %s, listed boolean NOT NULL)',
+                   coldefs);
+    FOR rr IN SELECT * FROM conv_runs ORDER BY rn LOOP
+        DROP TABLE IF EXISTS conv_cur;
+        EXECUTE format('CREATE TEMP TABLE conv_cur AS SELECT DISTINCT ON (t.product_id) t.product_id, %s
+                        FROM %I t WHERE t.run_id = %L AND t.full_run AND t.product_id IS NOT NULL
+                        ORDER BY t.product_id, t.id DESC', picks, site, rr.run_id);
+        ALTER TABLE conv_cur ADD PRIMARY KEY (product_id);
+        ANALYZE conv_cur;
+        IF rr.run_at < mf THEN  -- the seed's own listing events hold its run
+            INSERT INTO listing_events (website, product_id, scraped_at, run_id, listed, price,
+                                        stock_qty, available)
+            SELECT site, c.product_id, rr.run_at, rr.run_id, true, c.price, c.stock_qty, c.available
+            FROM conv_cur c
+            WHERE NOT EXISTS (SELECT 1 FROM conv_state s WHERE s.product_id = c.product_id AND s.listed)
+            ON CONFLICT DO NOTHING;
+            GET DIAGNOSTICS got = ROW_COUNT; n_appear := n_appear + got;
+            INSERT INTO listing_events (website, product_id, scraped_at, run_id, listed, price,
+                                        stock_qty, available)
+            SELECT site, s.product_id, rr.run_at, rr.run_id, false, s.price, s.stock_qty, s.available
+            FROM conv_state s
+            WHERE s.listed AND NOT EXISTS (SELECT 1 FROM conv_cur c WHERE c.product_id = s.product_id)
+            ON CONFLICT DO NOTHING;
+            GET DIAGNOSTICS got = ROW_COUNT; n_gone := n_gone + got;
+        END IF;
+        EXECUTE format($q$
+            INSERT INTO field_changes (website, product_id, scraped_at, run_id, field, old_value,
+                                       new_value)
+            SELECT %L, c.product_id, %L, %L, v.field, v.old_value, v.new_value
+            FROM conv_cur c JOIN conv_state s USING (product_id)
+            CROSS JOIN LATERAL (VALUES %s) AS v(field, old_value, new_value)
+            WHERE %s AND v.old_value IS DISTINCT FROM v.new_value
+              AND NOT EXISTS (SELECT 1 FROM field_changes f WHERE f.website = %L
+                              AND f.product_id = c.product_id AND f.scraped_at = %L
+                              AND f.field = v.field)
+            $q$, site, rr.run_at, rr.run_id, changes, differ, site, rr.run_at);
+        GET DIAGNOSTICS got = ROW_COUNT; n_fields := n_fields + got;
+        -- every product's last values after this run
+        EXECUTE format('UPDATE conv_state s SET %s, listed = true FROM conv_cur c
+                        WHERE c.product_id = s.product_id AND (NOT s.listed OR %s)', set_list, differ);
+        UPDATE conv_state s SET listed = false
+        WHERE s.listed AND NOT EXISTS (SELECT 1 FROM conv_cur c WHERE c.product_id = s.product_id);
+        INSERT INTO conv_state SELECT c.*, true FROM conv_cur c
+        WHERE NOT EXISTS (SELECT 1 FROM conv_state s WHERE s.product_id = c.product_id);
+    END LOOP;
+    DROP TABLE conv_cur;
+    DROP TABLE conv_state;
+    -- Since the seed: price, stock and availability changes of listed products (the change
+    -- log's old and new values; not its rows for new, returning or removed products, which
+    -- have a listing event at the same time and no old values)
+    INSERT INTO field_changes (website, product_id, scraped_at, run_id, field, old_value,
+                               new_value)
+    SELECT site, p.product_id, p.scraped_at, p.run_id, v.field, v.old_value, v.new_value
+    FROM prices p
+    CROSS JOIN LATERAL (VALUES ('price', p.old_price::text, p.price::text),
+                               ('stock_qty', p.old_stock_qty::text, p.stock_qty::text),
+                               ('available', p.old_available::text, p.available::text))
+         AS v(field, old_value, new_value)
+    WHERE p.website = site AND p.full_run AND p.scraped_at > mf
+      AND v.old_value IS DISTINCT FROM v.new_value
+      AND NOT EXISTS (SELECT 1 FROM listing_events e WHERE e.website = site
+                      AND e.product_id = p.product_id AND e.scraped_at = p.scraped_at)
+      AND NOT EXISTS (SELECT 1 FROM field_changes f WHERE f.website = site
+                      AND f.product_id = p.product_id AND f.scraped_at = p.scraped_at
+                      AND f.field = v.field);
+    GET DIAGNOSTICS n_log = ROW_COUNT;
+    -- Since the seed: a product coming back with another price, stock or availability than when
+    -- it left (its listing event before holds those)
+    INSERT INTO field_changes (website, product_id, scraped_at, run_id, field, old_value,
+                               new_value)
+    SELECT site, a.product_id, a.scraped_at, a.run_id, v.field, v.old_value, v.new_value
+    FROM listing_events a
+    CROSS JOIN LATERAL (SELECT b.price, b.stock_qty, b.available FROM listing_events b
+                        WHERE b.website = site AND b.product_id = a.product_id
+                          AND b.scraped_at < a.scraped_at
+                        ORDER BY b.scraped_at DESC LIMIT 1) b
+    CROSS JOIN LATERAL (VALUES ('price', b.price::text, a.price::text),
+                               ('stock_qty', b.stock_qty::text, a.stock_qty::text),
+                               ('available', b.available::text, a.available::text))
+         AS v(field, old_value, new_value)
+    WHERE a.website = site AND a.listed AND a.scraped_at > mf
+      AND v.old_value IS DISTINCT FROM v.new_value
+      AND NOT EXISTS (SELECT 1 FROM field_changes f WHERE f.website = site
+                      AND f.product_id = a.product_id AND f.scraped_at = a.scraped_at
+                      AND f.field = v.field);
+    GET DIAGNOSTICS n_back = ROW_COUNT;
+    UPDATE master_sync SET history_from = first_at WHERE website = site;
+    DROP TABLE conv_runs;
+    RETURN format('%s: %s runs from %s up to %s; %s appear, %s gone, %s field changes; since the '
+                  'seed %s price/stock/availability changes, %s on coming back',
+                  site, n_runs, first_at, mf, n_appear, n_gone, n_fields, n_log, n_back);
+END
+$f$""".replace("@VALS_ARRAY@", vals_array).replace("@COL_TYPES@", col_types))
+    stmts.append("REVOKE EXECUTE ON FUNCTION convert_history(text) FROM PUBLIC")
+
+    # change_log: the change list the prices table used to hold, worked out from the master
+    # history of converted sites (master_sync.history_from set), with the same columns and codes:
+    #   price / stock / out_of_stock / back_in_stock: price, stock and availability changes of a
+    #     listed product (field_changes), as common/master.py logged them (a listing event that
+    #     only repeats the product's state, as a seed's do, is no join or removal);
+    #   new / back_in_stock: a product joining the listing (listing_events) that wasn't listed
+    #     before (back_in_stock when seen before and in stock now), except at the site's first run;
+    #   out_of_stock with available false: a listed, in-stock product leaving the listing.
+    # Every other column as the product was at that time (the first change after it, else the
+    # master row). old_price, old_stock_qty and old_available as common/master.py wrote them.
+    view_cols = ["parent_id", "variant_id", "sku", "part_number", "model_number", "title", "brand",
+                 "category", "condition", "price", "available", "stock_qty", "url"]
+    later = ",\n                   ".join(
+        f"bool_or(f.field = '{c}') AS {_q('has_' + c)}, "
+        f"max(f.old_value) FILTER (WHERE f.field = '{c}') AS {_q('old_' + c)}" for c in view_cols)
+    at = {c: f"CASE WHEN l.{_q('has_' + c)} THEN l.{_q('old_' + c)}::{column_type(c)} "
+             f"ELSE m.{_q(c)} END" for c in view_cols}
+    stmts.append(f"""
+CREATE OR REPLACE VIEW change_log AS
+SELECT hashtextextended(y.website || ':' || y.product_id || ':' || y.scraped_at::text, 0) AS id,
+       y.scraped_at, y.website, y.product_id,
+       {", ".join(f"{at[c]} AS {_q(c)}" for c in view_cols[:9])},
+       CASE WHEN y.kind = 0 AND y.p_changed THEN y.p_old::numeric
+            WHEN y.kind = 1 THEN NULL ELSE {at["price"]} END AS old_price,
+       {at["price"]} AS price,
+       CASE WHEN y.kind = 2 THEN false ELSE {at["available"]} END AS available,
+       {at["stock_qty"]} AS stock_qty,
+       y.change, y.change LIKE '%back_in_stock%' AS restocked,
+       {at["url"]} AS url, y.run_id, true AS full_run,
+       CASE WHEN y.kind = 0 AND y.s_changed THEN y.s_old::numeric
+            WHEN y.kind = 1 THEN NULL ELSE {at["stock_qty"]} END AS old_stock_qty,
+       CASE WHEN y.kind = 0 AND y.a_changed THEN y.a_old::boolean
+            WHEN y.kind = 1 THEN NULL ELSE {at["available"]} END AS old_available
+FROM (
+    SELECT x.website, x.product_id, x.scraped_at, x.run_id, x.kind, x.p_changed, x.p_old,
+           x.s_changed, x.s_old, x.a_changed, x.a_old,
+           CASE
+             WHEN x.kind = 0 THEN CASE WHEN NOT x.joined_or_left THEN nullif(concat_ws('+',
+                  CASE WHEN x.p_changed THEN 'price' END,
+                  CASE WHEN x.s_changed THEN 'stock' END,
+                  CASE WHEN x.a_changed AND coalesce(x.a_old::boolean, false)
+                                            <> coalesce(x.a_new::boolean, false)
+                       THEN CASE WHEN x.a_new::boolean THEN 'back_in_stock' ELSE 'out_of_stock' END
+                  END), '') END
+             WHEN x.kind = 1 THEN CASE WHEN prev.listed IS NOT TRUE
+                                        AND NOT (prev.listed IS NULL AND x.scraped_at <= s.history_from)
+                  THEN CASE WHEN prev.listed IS NOT NULL AND coalesce(x.a_new::boolean, false)
+                            THEN 'back_in_stock' ELSE 'new' END END
+             ELSE CASE WHEN prev.listed AND coalesce(x.a_new::boolean, false) THEN 'out_of_stock' END
+           END AS change
+    FROM (
+        SELECT f.website, f.product_id, f.scraped_at, min(f.run_id) AS run_id, 0 AS kind,
+               bool_or(f.field = 'price') AS p_changed,
+               max(f.old_value) FILTER (WHERE f.field = 'price') AS p_old,
+               bool_or(f.field = 'stock_qty') AS s_changed,
+               max(f.old_value) FILTER (WHERE f.field = 'stock_qty') AS s_old,
+               bool_or(f.field = 'available') AS a_changed,
+               max(f.old_value) FILTER (WHERE f.field = 'available') AS a_old,
+               max(f.new_value) FILTER (WHERE f.field = 'available') AS a_new,
+               EXISTS (SELECT 1 FROM listing_events e WHERE e.website = f.website
+                       AND e.product_id = f.product_id AND e.scraped_at = f.scraped_at
+                       AND e.listed IS DISTINCT FROM (
+                           SELECT b.listed FROM listing_events b WHERE b.website = e.website
+                             AND b.product_id = e.product_id AND b.scraped_at < e.scraped_at
+                           ORDER BY b.scraped_at DESC LIMIT 1)) AS joined_or_left
+        FROM field_changes f
+        WHERE f.field IN ('price', 'stock_qty', 'available')
+        GROUP BY f.website, f.product_id, f.scraped_at
+        UNION ALL
+        SELECT e.website, e.product_id, e.scraped_at, e.run_id, CASE WHEN e.listed THEN 1 ELSE 2 END,
+               NULL, NULL, NULL, NULL, NULL, NULL, e.available::text, NULL
+        FROM listing_events e
+    ) x
+    JOIN master_sync s ON s.website = x.website AND s.history_from IS NOT NULL
+    LEFT JOIN LATERAL (
+        SELECT b.listed FROM listing_events b
+        WHERE x.kind > 0 AND b.website = x.website AND b.product_id = x.product_id
+          AND b.scraped_at < x.scraped_at
+        ORDER BY b.scraped_at DESC LIMIT 1) prev ON true
+) y
+JOIN products m ON m.website = y.website AND m.product_id = y.product_id
+LEFT JOIN LATERAL (
+    SELECT {later}
+    FROM (SELECT DISTINCT ON (f.field) f.field, f.old_value FROM field_changes f
+          WHERE f.website = y.website AND f.product_id = y.product_id AND f.scraped_at > y.scraped_at
+          ORDER BY f.field, f.scraped_at, f.id) f) l ON true
+WHERE y.change IS NOT NULL""")
+
+    # sites: each site's last full run (as create_sites_view), its changes counted from the
+    # change list: change_log for a converted site, the prices table for the others
+    stmts.append("""
+CREATE OR REPLACE VIEW sites AS
+WITH last AS (
+    SELECT DISTINCT ON (site) site, run_id, scraped_at, rows
+    FROM scrape_runs WHERE full_run AND status = 'saved'
+    ORDER BY site, logged_at DESC)
+SELECT l.site AS website,
+       l.scraped_at AS last_scraped_at,
+       l.rows AS products,
+       CASE WHEN m.history_from IS NOT NULL
+            THEN (SELECT count(*) FROM change_log c WHERE c.website = l.site AND c.scraped_at = l.scraped_at)
+            ELSE (SELECT count(*) FROM prices p WHERE p.website = l.site AND p.run_id = l.run_id) END AS changes,
+       CASE WHEN m.history_from IS NOT NULL
+            THEN (SELECT count(*) FROM change_log c WHERE c.website = l.site AND c.scraped_at = l.scraped_at
+                  AND c.restocked)
+            ELSE (SELECT count(*) FROM prices p WHERE p.website = l.site AND p.run_id = l.run_id
+                  AND p.restocked) END AS restocked,
+       l.run_id AS last_run_id
+FROM last l
+LEFT JOIN master_sync m ON m.website = l.site
+ORDER BY l.site""")
 
     # master_run(site, run): any saved full run of a site, whatever its storage: the site's own
     # rows when it has them (snapshot, both, and runs before the switch), else the rebuild
