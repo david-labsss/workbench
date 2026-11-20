@@ -142,6 +142,11 @@ def load(action, offset, limit=BATCH, low=None, high=None, brand=None):
     raise RuntimeError(f"no parts in the reply at offset {offset}: {r.text[:200]}")
 
 
+def amount(p):
+    """The part's price record (what the price-range filter goes by), or None if it has none."""
+    return (((p.get("variants") or [{}])[0] or {}).get("calculated_price") or {}).get("calculated_amount")
+
+
 def build_row(p, scraped_at):
     meta = p.get("metadata") or {}
     tags = {}
@@ -233,9 +238,16 @@ def scrape(limit, scraped_at):
                               for offset in range(0, count, BATCH)])
     read = len(by_id)
     brands = sorted({(p.get("metadata") or {}).get("brand") for p in by_id.values()} - {None, ""})
-    by_id |= read_brands(action, brands, total)
-    listed = in_ranges + len(by_id) - read
-    print(f"read {read} of them; {len(by_id) - read} more parts only under {len(brands)} brands",
+    found = {k: p for k, p in read_brands(action, brands, total).items() if k not in by_id}
+    # A part with a price is in exactly one price range, so in_ranges already counts it: one found
+    # only under its brand was missed while paging its range (its price moved to another range
+    # mid-read, as right after the pricing job writes prices: 11-20 17:52 and 18:54, ~16k parts,
+    # counted twice -> "only 97%" and refused). Only parts with no price are outside the ranges.
+    unpriced = sum(1 for p in found.values() if amount(p) is None)
+    by_id |= found
+    listed = in_ranges + unpriced
+    print(f"read {read} of them; {len(found)} more parts only under {len(brands)} brands "
+          f"({unpriced} with no price, {len(found) - unpriced} missed in their price range)",
           flush=True)
     if listed < total:
         raise RuntimeError(f"found {listed} parts in all, but the listing alone says {total}")
