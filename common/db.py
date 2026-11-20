@@ -1,20 +1,18 @@
-"""Append-only storage in Postgres (Railway project "server-scrapers"). The only place the
-scrapers save data (Google Sheets are no longer written).
+"""Storage in Postgres (Railway project "server-scrapers"). The only place the scrapers save
+data (Google Sheets are no longer written).
 
-  <site>          one table per site (serverpartdeals, directmacro, ...): every run's full
-                  snapshot
-  prices          one table for all sites ("website" column): price / stock changes, with a
-                  "restocked" column for products that came back in stock
+  products        one row per product per site: its current values (common/master.py saves
+                  every run there, and keeps every overwritten value in field_changes /
+                  listing_events / run_misses, so any past run can be rebuilt: master_run())
+  scrape_runs     one row per run (saved, or refused with the reason)
   sites           a view: each site's last full run, product count, changes and restocks
-Columns are the standard ones in common/schema.py, plus run_id and full_run. Every run
-INSERTs; nothing is ever updated or deleted. The scrapers connect as the "scraper_writer" role,
-which only has SELECT and INSERT rights (see db/setup.py), so even a buggy run can't change or
-remove old data. The old per-site <site>_price_history / <site>_restocked tables were copied
-into prices and dropped.
+Columns are the standard ones in common/schema.py. The scrapers connect as the "scraper_writer"
+role (see db/setup.py): it can update products and master_sync, and only add to the history
+and scrape_runs.
 
 Env vars:
   DATABASE_URL   connection URL for the scraper_writer role
-  GITHUB_RUN_ID  set by GitHub Actions; stored with every row as run_id
+  GITHUB_RUN_ID  set by GitHub Actions; stored with every run as run_id
 """
 import os
 import sys
@@ -23,7 +21,7 @@ from decimal import Decimal
 import psycopg
 from psycopg import sql
 
-from common.schema import PRICE_COLUMNS, PRODUCT_COLUMNS
+from common.schema import PRODUCT_COLUMNS
 
 NUMERIC = {"price", "old_price", "compare_at_price", "price_per_tb", "discount_pct", "stock_qty"}
 BOOLEAN = {"available", "restocked"}
@@ -70,34 +68,6 @@ def check():
     print("connected to database", flush=True)
 
 
-def insert_rows(table, columns, rows, scraped_at, full_run, run_id=None):
-    """INSERT rows into a table in one transaction (all or nothing).
-    scraped_at is either one timestamp for every row, or a list with one per row."""
-    run_id = run_id or os.getenv("GITHUB_RUN_ID", "local")
-    names = list(columns) + [name for name, _ in EXTRA_COLUMNS]
-    copy_sql = sql.SQL("COPY {} ({}) FROM STDIN").format(
-        sql.Identifier(table), sql.SQL(", ").join(sql.Identifier(n) for n in names))
-    per_row = isinstance(scraped_at, list)
-    with connect() as conn:
-        with conn.cursor() as cur, cur.copy(copy_sql) as copy:
-            for i, row in enumerate(rows):
-                ts = scraped_at[i] if per_row else scraped_at
-                copy.write_row([to_db(c, v, ts) for c, v in zip(columns, row)]
-                               + [run_id, full_run])
-    print(f"database: inserted {len(rows)} rows into {table} (run {run_id})", flush=True)
-
-
-def save_prices(price_rows, scraped_at, full_run):
-    """INSERT this run's changes (rows in PRICE_COLUMNS order, see common/schema.py) into the
-    shared prices table. Returns an error message or None."""
-    try:
-        insert_rows("prices", PRICE_COLUMNS, price_rows, scraped_at, full_run)
-        return None
-    except Exception as e:  # noqa: BLE001 - report any database failure, keep the run going
-        print(f"ERROR database save of prices failed: {e}", flush=True)
-        return str(e)
-
-
 def _as_text(value):
     """A database value written the way the old sheet showed it: booleans TRUE / FALSE, numbers
     without trailing zeros, empty for NULL. Keeps the scrapers' change checks unchanged."""
@@ -112,19 +82,15 @@ def _as_text(value):
 
 
 def run_rows(conn, site, run_id):
-    """SQL FROM-item: the rows of the site's saved full run `run_id`, wherever they are. The
-    site's own table has them on "snapshot" and "both" storage, and for a run the fallback in
-    common/runner.py saved the old way. On "master" storage the own table gets no new rows: the
-    master table (common/master.py) holds the site's latest run as its listed products. Use as
-    SELECT <columns> FROM <run_rows(...)> r. Every store table has an index on run_id."""
-    own = conn.execute(
-        sql.SQL("SELECT EXISTS (SELECT 1 FROM {} WHERE run_id = %s)").format(sql.Identifier(site)),
-        (run_id,)).fetchone()[0]
-    if own:
-        return sql.SQL("(SELECT * FROM {} WHERE run_id = {} AND full_run)").format(
-            sql.Identifier(site), sql.Literal(run_id))
-    return sql.SQL("(SELECT * FROM products WHERE website = {} AND listed)").format(
-        sql.Literal(site))
+    """SQL FROM-item: the rows of the site's saved full run `run_id`: the master table's listed
+    products when it is at that run (the site's latest), else the run rebuilt from the history
+    (master_run()). Use as SELECT <columns> FROM <run_rows(...)> r."""
+    at = conn.execute("SELECT run_id FROM master_sync WHERE website = %s", (site,)).fetchone()
+    if at and at[0] == run_id:
+        return sql.SQL("(SELECT * FROM products WHERE website = {} AND listed)").format(
+            sql.Literal(site))
+    return sql.SQL("(SELECT * FROM master_run({}, {}))").format(sql.Literal(site),
+                                                               sql.Literal(run_id))
 
 
 def last_full_run(conn, site):
@@ -136,10 +102,8 @@ def last_full_run(conn, site):
 
 
 def previous_run(site, key, columns):
-    """The last saved full run's rows as {key value: {column: text}}, or {} if there is none:
-    from the site's own table, or from the master table where the run is only there ("master"
-    storage; see run_rows). Read before this run is saved, so "previous" is never today's own
-    snapshot."""
+    """The last saved full run's rows as {key value: {column: text}}, or {} if there is none
+    (see run_rows). Read before this run is saved, so "previous" is never today's own run."""
     names = [key] + [c for c in columns if c != key]
     with connect() as conn:
         run_id = last_full_run(conn, site)
@@ -152,7 +116,7 @@ def previous_run(site, key, columns):
         for row in cur:
             values = dict(zip(names, (_as_text(v) for v in row)))
             previous[values[key]] = values
-        where = "master table" if "FROM products" in source.as_string(conn) else "own table"
+        where = "master table" if "FROM products" in source.as_string(conn) else "rebuilt"
     print(f"previous full run (run {run_id}, {where}): {len(previous)} rows", flush=True)
     return previous
 
@@ -168,9 +132,9 @@ def log_run(site, scraped_at, status, rows, products, full_run, note=""):
 
 
 def run_saved(site, scraped_at):
-    """True if this run (this site, this exact scrape time) is already logged as saved. The
-    fallback in common/runner.py checks it: a master save whose COMMIT went through but whose
-    connection then broke must not be saved a second time the old way."""
+    """True if this run (this site, this exact scrape time) is already logged as saved:
+    common/runner.py checks it when a save reports an error, since its COMMIT may still have gone
+    through (only the reply lost), so the run is not logged as refused."""
     with connect() as conn:
         return conn.execute(
             "SELECT 1 FROM scrape_runs WHERE site = %s AND scraped_at = %s AND status = 'saved' "
@@ -178,9 +142,8 @@ def run_saved(site, scraped_at):
 
 
 def last_run_rows(site):
-    """How many rows the site's last saved full run had, or 0 if it has none. The master storage
-    modes don't read the last run's rows, so the 90% rule (min_of_previous in common/runner.py)
-    compares with this count there."""
+    """How many rows the site's last saved full run had, or 0 if it has none (the 90% rule,
+    min_of_previous in common/runner.py, compares with it)."""
     with connect() as conn:
         last = conn.execute(
             "SELECT rows FROM scrape_runs WHERE site = %s AND full_run AND status = 'saved' "
@@ -201,16 +164,3 @@ def log_run_cur(cur, site, scraped_at, run_id, status, rows, products, full_run,
     cur.execute(sql.SQL("INSERT INTO scrape_runs ({}) VALUES ({})").format(
         sql.SQL(", ").join(sql.Identifier(n) for n in names),
         sql.SQL(", ").join(sql.Placeholder() for _ in names)), values)
-
-
-def save_run(site, rows, scraped_at, products, full_run, note=""):
-    """INSERT the snapshot (rows in PRODUCT_COLUMNS order) into the site's table and log the
-    run (with note, e.g. why the master table storage fell back). Returns an error message, or
-    None if it worked. Never raises, so the run can still report what happened."""
-    try:
-        insert_rows(site, PRODUCT_COLUMNS, rows, scraped_at, full_run)
-        log_run(site, scraped_at, "saved", len(rows), products, full_run, note)
-        return None
-    except Exception as e:  # noqa: BLE001 - report any database failure, keep the run going
-        print(f"ERROR database save failed: {e}", flush=True)
-        return str(e)

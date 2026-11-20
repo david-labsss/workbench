@@ -1,60 +1,48 @@
 """Master table storage: one row per product per site, changed only when the product changes.
+Every scraper saves this way (common/runner.py).
 
   products     ONE table for all sites, keyed by (website, product_id): each product's current
                values. A run UPDATEs only the products whose values changed and INSERTs new
-               ones. Products gone from the listing get listed = false; nothing is deleted.
-  prices       the change log, as before, now also with old_stock_qty and old_available.
-               Insert only.
-  scrape_runs  one row per run, now also with how many products were new, changed, removed
-               and unchanged.
+               ones. Products gone from the listing get listed = false.
+  scrape_runs  one row per run, with how many products were new, changed, removed and
+               unchanged (a run the master table can't take: status "refused" and the reason).
   listing_events  one row each time a product joins or leaves a site's listing, with its
                values then. Insert only.
   field_changes   one row per field a product changed (price, stock and availability too):
                its old and new value. So nothing the master table overwrites is lost. Insert
                only.
   run_misses   the listed products a partial run (under 90% of the listing) did not see. They
-               stay listed, as in common/changes.py; this only lets that run be rebuilt.
+               stay listed; this only lets that run be rebuilt.
 
-master_run(site, run) in the database (db/setup.py) gives any run since the site's last
-seed_master(): its listing from listing_events minus run_misses, and each value from the first
-change after the run (field_changes; before a site's convert_history(), the change log's old_*
-values and a removal's listing_events row for price, stock and availability), else the master
-row. convert_history() writes the runs from before the seed into the same history. Runs before the seed are in the site's own table, which
-seed_master() needs anyway: it builds the master from it, and a re-seed overwrites master rows
-without logging them. product_last_seen(site, product) gives when a run last found a product
-(a product row's scraped_at is when it last changed, not when it was last seen).
+That is the whole history: master_run(site, run) in the database (db/setup.py) gives any past
+run (its listing from listing_events minus run_misses, each value from the first change after
+the run, else the master row), master_product_runs(site, product) one product in every run, and
+the change_log view the change list (new, price, stock, out_of_stock, back_in_stock) the
+dashboard shows. convert_history() wrote the runs from before the master table into the same
+history. product_last_seen(site, product) gives when a run last found a product (a product
+row's scraped_at is when it last changed, not when it was last seen).
 
-Per site, ops/storage.json says how a run saves (common/runner.py reads it):
-  snapshot  the old way: every run's full snapshot into the site's own table (default)
-  both      the master table and the change log, plus the snapshot as before, so the
-            dashboard keeps working while the master is checked
-  master    the master table and the change log only; no snapshot rows
-
-Everything a run saves (master changes, change log rows, run totals, and the snapshot in
-"both") is written in ONE transaction, so a failed save leaves nothing behind. One lock per
-site stops two runs of the same site from saving at the same time, and a run older than the
-site's last saved run is refused, so stale data never overwrites newer data.
+Everything a run saves (master changes, history rows and the run's totals) is written in ONE
+transaction, so a failed save leaves nothing behind. One lock per site stops two runs of the
+same site from saving at the same time, and a run older than the site's last saved run is
+refused, so stale data never overwrites newer data.
 """
-import json
 import os
 
 from psycopg import sql
 
 from common import db, schema
 
-COMPARE_LISTING = 0.9  # as common/changes.py: removals only count when the listing is this full
+COMPARE_LISTING = 0.9  # removals only count when the listing is this full (else a partial run)
 TABLE = "products"
-CONFIG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ops",
-                      "storage.json")
 
 # Columns kept on the master row (all product columns but scraped_at, which is when the row
 # last changed)
 VALUE_COLUMNS = [c for c in schema.PRODUCT_COLUMNS if c not in ("scraped_at", "website",
                                                                 "product_id")]
-LOG_EXTRA = [("old_stock_qty", "numeric"), ("old_available", "boolean")]
 RUN_COUNTS = ["new_products", "changed_products", "removed_products", "unchanged_products"]
-# Fields whose old values the change log (prices) already keeps; every other value column goes to
-# field_changes when it changes
+# The fields the old change log (prices) kept apart; master_rebuild() reads them from there for a
+# store that isn't converted yet (db/setup.py)
 LOGGED_IN_PRICES = ("price", "stock_qty", "available")
 HISTORY_COLUMNS = [c for c in VALUE_COLUMNS if c not in LOGGED_IN_PRICES]
 
@@ -64,25 +52,8 @@ class Refused(Exception):
 
 
 class NotSynced(Refused):
-    """The master table is not at the site's last saved run (it needs seed_master()); nothing
-    was saved. common/runner.py then saves the run the old way, so the run is not lost."""
-
-
-def config():
-    try:
-        with open(CONFIG) as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
-
-
-def mode(site):
-    """snapshot, both or master. An env var STORAGE_MODE overrides the file (tests)."""
-    m = os.getenv("STORAGE_MODE") or config().get("sites", {}).get(site) \
-        or config().get("default", "snapshot")
-    if m not in ("snapshot", "both", "master"):
-        raise ValueError(f"unknown storage mode {m!r} for {site}")
-    return m
+    """The master table is not at the site's last saved run; nothing was saved (the run is
+    refused, common/runner.py logs why)."""
 
 
 def _ident(names):
@@ -96,25 +67,21 @@ def _copy(cur, table, columns, rows):
             copy.write_row(row)
 
 
-def save(site, rows, scraped_dt, products, full_run, snapshot):
-    """Save one run the master way. rows: this run in PRODUCT_COLUMNS order. snapshot: also
-    insert the full snapshot into the site's table ("both" mode). Returns the run's counts
+def save(site, rows, scraped_dt, products, full_run):
+    """Save one run. rows: this run in PRODUCT_COLUMNS order. Returns the run's counts
     {new, changed, removed, unchanged, restocked, changes, field_changes}. Raises Refused when
     a rule stops the run, or any database error; either way nothing is saved."""
     run_id = os.getenv("GITHUB_RUN_ID", "local")
     cols = schema.PRODUCT_COLUMNS
-    # Same conversion as the snapshot path, so both store identical values
+    # The database's types (common/db.py), as every store's rows have always been stored
     converted = [[db.to_db(c, v, scraped_dt) for c, v in zip(cols, row)] for row in rows]
 
     with db.connect() as conn, conn.cursor() as cur:
         # One lock per site, held until commit
         cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (f"scrape:{site}",))
 
-        # Test runs never touch the master table or the change log
+        # Test runs never touch the master table or the history
         if not full_run:
-            if snapshot:
-                _copy(cur, site, cols + ["run_id", "full_run"],
-                      (r + [run_id, False] for r in converted))
             db.log_run_cur(cur, site, scraped_dt, run_id, "saved", len(rows), products, False,
                            "test run: master table not touched")
             return {"new": 0, "changed": 0, "removed": 0, "unchanged": 0, "restocked": 0,
@@ -126,17 +93,21 @@ def save(site, rows, scraped_dt, products, full_run, snapshot):
         if last and last[0] >= scraped_dt:
             raise Refused(f"a newer run ({last[0]}) is already saved for {site}")
         # The master must hold exactly the site's last saved run, or every difference would
-        # be logged twice (or missed). seed_master() sets this point; every save moves it.
+        # be logged twice (or missed). A site's first save sets this point; every save moves it.
         synced = cur.execute("SELECT run_id FROM master_sync WHERE website = %s",
                              (site,)).fetchone()
         if last and (not synced or synced[0] != last[2]):
             raise NotSynced(f"the master table is not at {site}'s last saved run "
-                            f"({last[2]}); run SELECT seed_master('{site}') first")
+                            f"({last[2]}, master at {synced[0] if synced else 'nothing'}): look "
+                            "into it before the next run")
 
         # This run in a temp table, typed like the product tables. A product without an id
-        # can't be keyed in the master table: it stays in the snapshot only (as the old way).
+        # can't be keyed in the master table, so it isn't saved (no store has had one).
         pid = cols.index("product_id")
         keyed = [r for r in converted if r[pid] is not None]
+        if len(keyed) < len(converted):
+            print(f"WARNING: {len(converted) - len(keyed)} products without a product_id, not saved",
+                  flush=True)
         cur.execute(sql.SQL("CREATE TEMP TABLE cur ({}) ON COMMIT DROP").format(
             sql.SQL(", ").join(sql.SQL("{} {}").format(
                 sql.Identifier(c), sql.SQL(db.column_type(c).replace(" NOT NULL", "")))
@@ -176,69 +147,25 @@ def save(site, rows, scraped_dt, products, full_run, snapshot):
                 sql.Identifier(TABLE)), (site,)).fetchone()[0]
         compare_listing = len(keyed) >= COMPARE_LISTING * listed_before
 
-        # Change log rows (the same rules as common/changes.py)
-        log_cols = schema.PRICE_COLUMNS + [n for n, _ in LOG_EXTRA] + ["run_id", "full_run"]
-        def log_select(change, old_price, old_stock, old_avail, source="c", available=None):
-            src = {c: sql.SQL("{}.{}").format(sql.Identifier(source), sql.Identifier(c))
-                   for c in cols}
-            out = []
-            for col in schema.PRICE_COLUMNS:
-                if col == "scraped_at":
-                    out.append(sql.Literal(scraped_dt))
-                elif col == "website":
-                    out.append(sql.Literal(site))
-                elif col == "change":
-                    out.append(change)
-                elif col == "restocked":
-                    out.append(sql.SQL("({}) LIKE '%%back_in_stock%%'").format(change))
-                elif col == "old_price":
-                    out.append(old_price)
-                elif col == "available" and available is not None:
-                    out.append(available)
-                else:
-                    out.append(src[col])
-            out += [old_stock, old_avail, sql.Literal(run_id), sql.Literal(True)]
-            return sql.SQL(", ").join(out)
-
-        # 1. new and returning products: back_in_stock when seen before and in stock now,
-        #    otherwise new (as common/changes.py). A site's first saved run logs nothing (as
-        #    common/changes.py, which has no previous run to compare with).
-        logged = []
-        if last:
-            cur.execute(sql.SQL("""
-                INSERT INTO prices ({cols})
-                SELECT {sel} FROM cur c JOIN diff d USING (product_id)
-                WHERE d.is_new OR d.is_returning RETURNING change, restocked""").format(
-                cols=_ident(log_cols),
-                sel=log_select(sql.SQL("CASE WHEN d.is_returning AND coalesce(c.available, false) "
-                                       "THEN 'back_in_stock' ELSE 'new' END"),
-                               sql.SQL("NULL::numeric"), sql.SQL("NULL::numeric"),
-                               sql.SQL("NULL::boolean"))))
-            logged += cur.fetchall()
-        # 2. tracked changes on listed products
-        cur.execute(sql.SQL("""
-            INSERT INTO prices ({cols})
-            SELECT {sel} FROM cur c JOIN diff d USING (product_id)
+        # The run's changes by the change list's rules (counted for the log; the change_log
+        # view gives them from the history): new and returning products (back_in_stock when
+        # seen before and in stock now; none on a site's first saved run), the tracked changes
+        # of listed products, and in-stock products leaving the listing (not on a partial run)
+        logged = [(change, "back_in_stock" in change.split("+")) for (change,) in cur.execute(
+            sql.SQL("""
+            SELECT CASE WHEN d.is_returning AND coalesce(c.available, false) THEN 'back_in_stock'
+                        ELSE 'new' END
+            FROM cur c JOIN diff d USING (product_id) WHERE %s AND (d.is_new OR d.is_returning)
+            UNION ALL
+            SELECT d.tracked FROM diff d
             WHERE NOT d.is_new AND NOT d.is_returning AND d.tracked <> ''
-            RETURNING change, restocked""").format(
-            cols=_ident(log_cols),
-            sel=log_select(sql.SQL("d.tracked"), sql.SQL("d.old_price"),
-                           sql.SQL("d.old_stock_qty"), sql.SQL("d.old_available"))))
-        logged += cur.fetchall()
+            UNION ALL
+            SELECT 'out_of_stock' FROM {master} p
+            WHERE %s AND p.website = %s AND p.listed AND coalesce(p.available, false)
+              AND NOT EXISTS (SELECT 1 FROM cur c WHERE c.product_id = p.product_id)
+            """).format(master=sql.Identifier(TABLE)), (bool(last), compare_listing, site))]
         removed = missed = 0
         if compare_listing:
-            # 3. gone from the listing after being in stock: out_of_stock, from the master row
-            cur.execute(sql.SQL("""
-                INSERT INTO prices ({cols})
-                SELECT {sel} FROM {master} p
-                WHERE p.website = %s AND p.listed AND coalesce(p.available, false)
-                  AND NOT EXISTS (SELECT 1 FROM cur c WHERE c.product_id = p.product_id)
-                RETURNING change, restocked""").format(
-                cols=_ident(log_cols), master=sql.Identifier(TABLE),
-                sel=log_select(sql.SQL("'out_of_stock'"), sql.SQL("p.price"),
-                               sql.SQL("p.stock_qty"), sql.SQL("p.available"), source="p",
-                               available=sql.SQL("false"))), (site,))
-            logged += cur.fetchall()
             # listing_events: each product leaving the listing, with its values then, so a past
             # run can be rebuilt exactly (common to every removal, in stock or not)
             cur.execute(sql.SQL("""
@@ -324,18 +251,26 @@ def save(site, rows, scraped_dt, products, full_run, snapshot):
         counts = {"new": new + returning, "changed": changed, "removed": removed,
                   "unchanged": len(keyed) - new - returning - changed}
 
-        if snapshot:
-            _copy(cur, site, cols + ["run_id", "full_run"],
-                  (r + [run_id, True] for r in converted))
-
-        cur.execute("INSERT INTO master_sync (website, run_id, scraped_at) VALUES (%s, %s, %s) "
+        # A new site's history starts with this run (history_from: its whole history is the
+        # master history); an existing site's start stays as it is
+        cur.execute("INSERT INTO master_sync (website, run_id, scraped_at, history_from) "
+                    "VALUES (%s, %s, %s, %s) "
                     "ON CONFLICT (website) DO UPDATE SET run_id = EXCLUDED.run_id, "
-                    "scraped_at = EXCLUDED.scraped_at", (site, run_id, scraped_dt))
+                    "scraped_at = EXCLUDED.scraped_at", (site, run_id, scraped_dt, scraped_dt))
         db.log_run_cur(cur, site, scraped_dt, run_id, "saved", len(rows), products, True,
-                       f"storage {'both' if snapshot else 'master'}",
+                       "storage master",
                        {f"{k}_products": v for k, v in counts.items()})
+        # The history is kept for 3 months: trim_history() (db/setup.py) deletes what only older
+        # runs need. In a savepoint, so a problem there never stops the run being saved.
+        try:
+            with conn.transaction():
+                trimmed = cur.execute("SELECT trim_history(%s)", (site,)).fetchone()[0]
+            if trimmed != "nothing to trim":
+                print(f"history: {trimmed}", flush=True)
+        except Exception as e:  # noqa: BLE001 - the run itself is saved either way
+            print(f"WARNING: trim_history failed ({e}); the run is saved", flush=True)
     print(f"master: {counts['new']} new, {counts['changed']} changed, {counts['removed']} "
-          f"removed, {counts['unchanged']} unchanged; change log {changes}; "
+          f"removed, {counts['unchanged']} unchanged; changes {changes}; "
           f"{field_changes} field changes" + (f"; partial run, {missed} not seen" if missed else ""),
           flush=True)
     return dict(counts, restocked=restocked, changes=changes, field_changes=field_changes,

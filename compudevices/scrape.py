@@ -33,9 +33,14 @@ from bs4 import BeautifulSoup
 from psycopg import sql
 
 from common import db, http, runner, schema
-from db.setup import SITES
 
 SITE = "compudevices"
+# the sites whose part numbers are searched: the original sites list (db/setup.py's SITES until the
+# per-store tables went), kept as it was so the searches stay the same
+SITES = ["serverpartdeals", "directmacro", "serverorbit", "orangehardwares", "waterpanther",
+         "unixsurplus", "velocitytechsolutions", "disctech", "harddiskdirect",
+         "soliddiskdirect", "pcserverandparts", "flagshiptech", "goharddrive",
+         "memoryclearance", "serverworlds", "compudevices", "usithardware", "serversupply"]
 BASE = "https://www.compudevices.com"
 MIN_SITES = 5        # search the part numbers at least this many other sites carry
 MIN_LENGTH = 5       # shorter ones are mostly model names (R640, Z440) found in many titles

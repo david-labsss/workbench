@@ -1,5 +1,6 @@
-"""The run steps every scraper shares: read the previous run, scrape, check the snapshot is
-complete, find changes, save. A site's scrape.py only fetches and maps its products:
+"""The run steps every scraper shares: scrape, check the run is complete, save it to the master
+table (common/master.py), which finds and logs the changes. A site's scrape.py only fetches and
+maps its products:
 
     def scrape(limit, scraped_at):
         ...
@@ -25,12 +26,15 @@ import sys
 import time
 from datetime import datetime, timezone
 
-from common import changes, db, master, schema
+from common import db, master, schema
 
 COLUMNS = schema.PRODUCT_COLUMNS
 COMPLETE = 0.98  # a full run must reach this share of the site's listed product count
 REPORT_COLUMNS = ["sku", "part_number", "model_number", "brand", "category", "condition",
                   "capacity", "interface", "form_factor", "price", "stock_qty"]
+# Columns of the last full run a needs_previous scraper gets (serverpartdeals: last known stock)
+PREVIOUS_COLUMNS = ["parent_id", "variant_id", "sku", "part_number", "model_number", "title",
+                    "brand", "category", "condition", "price", "available", "stock_qty", "url"]
 
 
 def set_output(name, value):
@@ -38,6 +42,18 @@ def set_output(name, value):
     if path:
         with open(path, "a") as f:
             f.write(f"{name}={value}\n")
+
+
+def refuse(site, scraped_dt, rows, full_run, reason, dry_run=False):
+    """Stop without saving: the site keeps its last saved run, and the reason goes to
+    scrape_runs (status "refused") so every run that wasn't saved is visible."""
+    set_output("rows", rows)
+    if not dry_run:
+        try:
+            db.log_run(site, scraped_dt, "refused", rows, rows, full_run, f"refused: {reason}"[:500])
+        except Exception as e:  # noqa: BLE001 - the exit below still reports the reason
+            print(f"WARNING: could not log the refused run: {e}", flush=True)
+    sys.exit(f"Not saved (refused, the site keeps its last saved run): {reason}")
 
 
 def run(site, scrape, min_of_previous=None, needs_previous=False):
@@ -50,23 +66,16 @@ def run(site, scrape, min_of_previous=None, needs_previous=False):
     scraped_dt = datetime.now(timezone.utc)
     scraped_at = scraped_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
 
-    # snapshot (old way), both (master + snapshot) or master (master only): ops/storage.json
-    storage = master.mode(site)
-    print(f"storage: {storage}", flush=True)
-
-    # Read the previous run before scraping, so bad credentials fail in seconds. The master
-    # modes compare against the master table instead, inside the save.
+    # Check the database before scraping, so bad credentials fail in seconds. The save compares
+    # the run with the master table itself.
     previous = {}
     if not dry_run:
         db.check()
-        if (full_run and storage == "snapshot") or needs_previous:
-            # from the site's own table, or the master table where the run is only there
-            previous = db.previous_run(site, "product_id", changes.PREVIOUS_COLUMNS)
-    # The last full run's size, for min_of_previous. The master modes don't read the last run's
-    # rows, so they take its row count from scrape_runs; without it the rule would compare with 0
-    # and let any run through.
-    last_count = len(previous)
-    if min_of_previous and full_run and not dry_run and storage != "snapshot":
+        if needs_previous:
+            previous = db.previous_run(site, "product_id", PREVIOUS_COLUMNS)
+    # The last full run's size, for min_of_previous (from scrape_runs)
+    last_count = 0
+    if min_of_previous and full_run and not dry_run:
         last_count = db.last_run_rows(site)
 
     started = time.time()
@@ -75,18 +84,21 @@ def run(site, scrape, min_of_previous=None, needs_previous=False):
     print(f"scraped {len(rows)} rows in {time.time() - started:.0f}s (site lists {listed})",
           flush=True)
     if not rows:
-        sys.exit("No products scraped")
+        refuse(site, scraped_dt, 0, full_run, "No products scraped", dry_run)
     ids = [r[COLUMNS.index("product_id")] for r in rows]
     if len(set(ids)) != len(ids):
-        sys.exit(f"product_id is not unique: {len(ids) - len(set(ids))} duplicates")
-    # Never save a partial snapshot as if it were the full catalogue
+        refuse(site, scraped_dt, len(rows), full_run,
+               f"product_id is not unique: {len(ids) - len(set(ids))} duplicates", dry_run)
+    # Never save a partial run as if it were the full catalogue
     if full_run and listed and len(rows) < COMPLETE * listed:
-        sys.exit(f"Only scraped {len(rows)} of {listed} products ({len(rows) / listed:.0%}); "
-                 "not saving a partial snapshot")
+        refuse(site, scraped_dt, len(rows), full_run,
+               f"Only scraped {len(rows)} of {listed} products ({len(rows) / listed:.0%}); "
+               "not saving a partial run", dry_run)
     if min_of_previous and full_run and len(rows) < min_of_previous * last_count:
-        sys.exit(f"Only scraped {len(rows)} products, the last full run had {last_count}; "
-                 "not saving a partial snapshot (if the store really shrank, lower "
-                 f"min_of_previous in {site}/scrape.py for one run)")
+        refuse(site, scraped_dt, len(rows), full_run,
+               f"Only scraped {len(rows)} products, the last full run had {last_count}; "
+               "not saving a partial run (if the store really shrank, lower "
+               f"min_of_previous in {site}/scrape.py for one run)", dry_run)
 
     for c in REPORT_COLUMNS:
         filled = sum(1 for r in rows if r[COLUMNS.index(c)] not in ("", None))
@@ -95,62 +107,30 @@ def run(site, scrape, min_of_previous=None, needs_previous=False):
     in_stock = sum(1 for r in rows
                    if str(r[COLUMNS.index("available")]).strip().lower() in db.TRUE_VALUES)
 
-    # If the master table can't take this run (not at the site's last saved run, or any error),
-    # the run is saved the old way instead, so it is never lost. The master table then stays
-    # behind (every later run of the site falls back too) until SELECT seed_master('<site>').
-    fallback = None
+    # The master table takes the run, or the run is refused: nothing is saved (the site keeps its
+    # last saved run) and the reason goes to scrape_runs (status "refused").
     if dry_run:
         for row in rows[:5]:
             print(json.dumps(dict(zip(COLUMNS, row)), indent=2, default=str))
-    elif storage != "snapshot":
-        result = None
+    else:
+        result, reason = None, None
         try:
-            result = master.save(site, rows, scraped_dt, len(rows), full_run,
-                                 snapshot=storage == "both")
-        except master.NotSynced as e:
-            fallback = str(e)
-        except master.Refused as e:
-            set_output("rows", len(rows))
-            sys.exit(f"Not saved: {e}")
-        except Exception as e:  # noqa: BLE001 - any master failure: save the old way instead
-            fallback = f"{type(e).__name__}: {e}"
+            result = master.save(site, rows, scraped_dt, len(rows), full_run)
+        except Exception as e:  # noqa: BLE001 - refused or any error: nothing was saved
+            reason = str(e) if isinstance(e, master.Refused) else f"{type(e).__name__}: {e}"
         if result is not None:
             set_output("restocked", result["restocked"])
         else:
-            fallback = fallback or "unknown error"
             try:
                 committed = db.run_saved(site, scraped_dt)
-            except Exception:  # noqa: BLE001 - can't tell: try the old way (it reports errors)
+            except Exception:  # noqa: BLE001 - can't tell; refused below says so
                 committed = False
             if committed:
-                # the master save's COMMIT went through, only its reply was lost
-                print(f"WARNING: master table storage reported an error ({fallback}), but the "
-                      f"run is saved; not saving it again.", flush=True)
-                fallback = None
+                # the save's COMMIT went through, only its reply was lost
+                print(f"WARNING: the save reported an error ({reason}), but the run is saved.",
+                      flush=True)
             else:
-                print(f"WARNING: master table storage could not save this run ({fallback}). "
-                      f"Saving it the old way (snapshot) instead; the master table stays behind "
-                      f"until SELECT seed_master('{site}') is run.", flush=True)
-                # the old way compares with the last saved run: in the site's own table, or on
-                # "master" storage in the master table (db.previous_run finds it)
-                previous = (db.previous_run(site, "product_id", changes.PREVIOUS_COLUMNS)
-                            if full_run else {})
-    if not dry_run and (storage == "snapshot" or fallback):
-        prices = changes.find_changes(site, rows, previous, full_run)
-        counts = {}
-        for p in prices:
-            change = p[schema.PRICE_COLUMNS.index("change")]
-            counts[change] = counts.get(change, 0) + 1
-        restocked = schema.restocked_count(prices)
-        print(f"{len(prices)} changes {counts}, {restocked} back in stock", flush=True)
-        # a fallback run is marked in scrape_runs, so it is visible (not a plain old-way run)
-        note = f"storage fallback: {fallback}"[:500] if fallback else ""
-        db_error = db.save_run(site, rows, scraped_dt, len(rows), full_run, note)
-        db_error = db_error or db.save_prices(prices, scraped_dt, full_run)
-        set_output("restocked", restocked)
-        if db_error:
-            set_output("rows", len(rows))
-            sys.exit(f"Saving to the database failed: {db_error}")
+                refuse(site, scraped_dt, len(rows), full_run, reason)
     set_output("rows", len(rows))
     set_output("products", len(rows))
     set_output("in_stock", in_stock)

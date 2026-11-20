@@ -43,55 +43,23 @@ def days_since(d, today):
     return (today - datetime.date(y, m, dd)).days
 
 
-# Tables with run_id and scraped_at that are not a site's own table
-NOT_SITES = ("prices", "qa_checks", "scrape_runs", "listing_events", "field_changes", "products",
-             "master_sync", "run_misses")
-
-
-def master_runs(conn):
-    """{site: last saved run's time} for sites saved to the master table (common/master.py), or {}
-    when there is none or this login can't read it."""
-    try:
-        return dict(conn.execute("SELECT website, scraped_at FROM master_sync").fetchall())
-    except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
-        return {}
-
-
 def sweep(conn):
+    """{site: {last, rows, price, image_url, description}}: each site's last saved full run (the
+    master table, common/master.py, holds it as the site's listed products) with how full its
+    price, image and description are (% of its products); rows 0 for a site that has runs logged
+    but never saved one."""
     cur = conn.cursor()
-    cur.execute("""SELECT table_name::text, array_agg(column_name::text)
-                   FROM information_schema.columns WHERE table_schema='public'
-                   GROUP BY table_name""")
-    cols = {t: set(c) for t, c in cur.fetchall()}
-    tables = sorted(t for t, cs in cols.items()
-                    if {"run_id", "scraped_at"} <= cs and t not in NOT_SITES)
-    synced = master_runs(conn)
     rep = {}
-    for t in tables:
-        cur.execute(f'SELECT max(scraped_at) FROM "{t}"')
-        mx = cur.fetchone()[0]
-        fields = [c for c in ("price", "image_url", "description") if c in cols[t]]
-        sel = ", ".join(["count(*)"] + [f"count({c})" for c in fields])
-        # In "master" storage the site's own table gets no new rows: its last run is the master
-        # table's listed products. In "both" both hold the same run, so the site's table is read.
-        if t in synced and (not mx or synced[t] > mx):
-            mx = synced[t]
-            cur.execute(f"SELECT {sel} FROM products WHERE website=%s AND listed", (t,))
-        elif mx:
-            cur.execute(f'SELECT run_id FROM "{t}" WHERE scraped_at=%s LIMIT 1', (mx,))
-            rid = cur.fetchone()[0]
-            cur.execute(f'SELECT {sel} FROM "{t}" WHERE run_id=%s', (rid,))
-        info = {"last": str(mx)[:10] if mx else None}
-        if not mx:
-            info["rows"] = 0
-            rep[t] = info
-            continue
-        row = cur.fetchone()
-        n = row[0]
-        info["rows"] = n
-        for i, c in enumerate(fields, 1):
-            info[c] = round(100 * row[i] / n, 1) if n else None
-        rep[t] = info
+    for site, at in cur.execute("SELECT website, scraped_at FROM master_sync").fetchall():
+        cur.execute("SELECT count(*), count(price), count(image_url), count(description) "
+                    "FROM products WHERE website = %s AND listed", (site,))
+        n, *filled = cur.fetchone()
+        info = {"last": str(at)[:10], "rows": n}
+        for c, f in zip(("price", "image_url", "description"), filled):
+            info[c] = round(100 * f / n, 1) if n else None
+        rep[site] = info
+    for (site,) in cur.execute("SELECT DISTINCT site FROM scrape_runs").fetchall():
+        rep.setdefault(site, {"last": None, "rows": 0})
     return rep
 
 
@@ -104,7 +72,7 @@ def stale_prices(conn):
         FROM qa_checks q
         WHERE q.result IN ('price', 'price+stock')
           AND q.checked_at > now() - make_interval(days => %(days)s)
-          AND NOT EXISTS (SELECT 1 FROM prices p
+          AND NOT EXISTS (SELECT 1 FROM change_log p
                           WHERE p.website = q.website AND p.change ILIKE '%%price%%'
                             AND p.scraped_at > now() - make_interval(days => %(days)s))
         GROUP BY q.website HAVING count(DISTINCT q.run_id) >= %(runs)s
