@@ -1,14 +1,14 @@
 """Dispatch this account's scrapers, spread across the morning window.
 
-Run by scheduler.yml once at 06:00 PKT. It reads ops/scrape_schedule.json (the site -> owner map),
+Run by scheduler.yml once at 05:17 PKT. It reads ops/scrape_schedule.json (the site -> owner map),
 takes the sites this account owns (heaviest first), and dispatches them one by one with a gap
-between, so they start spread across the 06:00-12:00 window instead of all at once. Most sites run
+between, so they start spread over the next 5 hours instead of all at once. Most sites run
 through the shared scrape.yml (dispatched with the site key); a few keep their own workflow (the
 "wf" field). Uses the built-in GITHUB_TOKEN (needs actions: write).
 
 Env: GITHUB_REPOSITORY, GITHUB_REPOSITORY_OWNER, GITHUB_TOKEN (all set by Actions); ONLY = optional
 comma-separated site keys to dispatch instead of the whole account (for testing); SLOT = "morning"
-(06:00 PKT, the default) or "evening" (17:00 PKT): only the sites with that "slot" in the schedule
+(05:17 PKT, the default) or "evening" (17:00 PKT): only the sites with that "slot" in the schedule
 (no "slot" = morning). ONLY ignores the slot.
 
 The evening slot (2026-11-17): our own store (usithardware) is read at 17:00 PKT, after the US IT
@@ -28,7 +28,7 @@ REPO = os.environ["GITHUB_REPOSITORY"]
 TOKEN = os.environ["GITHUB_TOKEN"]
 ONLY = {s.strip() for s in os.getenv("ONLY", "").split(",") if s.strip()}
 SLOT = os.getenv("SLOT") or "morning"
-WINDOW_SEC = 300 * 60           # spread over 5 h (06:00-11:00 PKT); last well inside the window
+WINDOW_SEC = 300 * 60           # spread over 5 h from the start (05:17-10:17 PKT when GitHub is on time)
 MAX_GAP = 20 * 60
 
 sched = json.loads((pathlib.Path(__file__).resolve().parent.parent / "ops/scrape_schedule.json").read_text())
