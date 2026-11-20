@@ -10,7 +10,11 @@ No credentials or internal n8n details live in this file:
 
 Status per row (matched to a scraper by the scraper's REAL target domain, so e.g.
 harddrivesdirect.com is never confused with the harddiskdirect scraper):
-  Scraped / Blocked (...) / On hold (...) / Dropped (...) / Built, not live (...) / Not built yet
+  Scraped / Not saving since MM-DD: <reason> / Blocked (...) / On hold (...) / Dropped (...) /
+  Built, not live (...) / Not built yet
+A live store with no saved run for 36 h (scrape_runs, read with DATABASE_URL when it is set) shows
+"Not saving since <its last save>" ("Never saved" if it never has), with the reason from ops/store_problems.json when one is known;
+it shows "Scraped" again as soon as it saves.
 
 Run:  python -I ops/update_scrape_status.py            # write
       python -I ops/update_scrape_status.py --dry       # print only
@@ -37,6 +41,10 @@ STATUS_COL = 18  # column R
 # here (e.g. a "Building" entry becomes "Scraped" once the scraper goes live). Anything not live
 # and not here is "Not built yet".
 CURATED = json.load(open(os.path.join(HERE, "store_status.json"), encoding="utf-8"))
+# Why a live store isn't saving, by scraper (shown only while it has no saved run for 36 h).
+PROBLEMS = {k: v for k, v in json.load(open(os.path.join(HERE, "store_problems.json"), encoding="utf-8")).items()
+            if not k.startswith("_")}
+STALE_HOURS = 36
 # Scrapers whose target domain differs from / isn't parsed from a BASE var.
 DOMAIN_OVERRIDE = {
     "staples": "staples.com",
@@ -75,6 +83,17 @@ def key_domains():
     return out
 
 
+def last_saves():
+    """{scraper: last saved run's time (UTC)} from scrape_runs, or None without DATABASE_URL."""
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        print("DATABASE_URL not set: live stores show as Scraped without checking their saves", flush=True)
+        return None
+    import psycopg
+    with psycopg.connect(url, connect_timeout=30) as conn:
+        return dict(conn.execute("SELECT site, max(logged_at) FROM scrape_runs WHERE status = 'saved' GROUP BY site").fetchall())
+
+
 def open_sheet():
     import gspread
     sa_json = os.environ.get("GOOGLE_SA_JSON")
@@ -89,6 +108,17 @@ def main():
     dry = "--dry" in sys.argv
     LIVE = live_keys()
     K2D = key_domains()
+    SAVES = last_saves()
+    from datetime import datetime, timedelta, timezone
+    stale_before = datetime.now(timezone.utc) - timedelta(hours=STALE_HOURS)
+
+    def live_status(key):
+        last = SAVES.get(key) if SAVES is not None else None
+        if SAVES is None or (last and last >= stale_before):
+            return "Scraped"
+        reason = PROBLEMS.get(key)
+        head = f"Not saving since {(last + timedelta(hours=5)):%m-%d}" if last else "Never saved"  # PKT date
+        return head + (f": {reason}" if reason else "")
     print(f"live keys: {len(LIVE)}; scrapers with a domain: {len(K2D)}", flush=True)
 
     def match_key(dom):
@@ -107,7 +137,7 @@ def main():
             continue
         key = match_key(dom)
         if key and key in LIVE:
-            status = "Scraped"
+            status = live_status(key)
         elif dom in CURATED:
             status = CURATED[dom]
         else:
