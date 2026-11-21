@@ -17,7 +17,8 @@ The rest comes from the page: product id (hidden input product_id), title, brand
 Points"; the catch-all "Shop All Products" is skipped), image_url (og:image) and description
 (the Description tab as plain text). The number to check the snapshot
 against is the sitemap's product count; a page that fails (after common/http retries) stops
-the run, and a sitemap URL that is gone (404) is skipped.
+the run, and a sitemap URL that is gone (404) is skipped. A page that comes back with no
+product on it is tried again 3 times, a few minutes apart, before it stops the run (fetch).
 
 Run steps, changes and env vars: common/runner.py. Columns: common/schema.py.
 """
@@ -34,6 +35,7 @@ SITE = "novianetworks"
 BASE = "https://www.novianetworks.com"
 WORKERS = 2
 DELAY = 1.0                   # pause after each page, per worker
+NOT_PRODUCT_WAITS = (30, 90, 180)   # seconds before each new try of a page that came back with no product
 BCDATA_RE = re.compile(r"var BCData = (\{.*?\});\s*$", re.S | re.M)
 GENERIC_CATEGORIES = {"home", "shop all products", "shop all accessories"}
 EMPTY_VALUES = {"", "n/a", "na", "none", "-"}
@@ -62,15 +64,35 @@ def sitemap_urls():
     return urls
 
 
+def is_product_page(html):
+    """The parts parse() needs: the theme's BCData, the hidden product_id input and the title."""
+    return "var BCData" in html and 'name="product_id"' in html and "productView-title" in html
+
+
 def fetch(url):
-    """(url, html), or None when the product is gone (404). Other failures raise."""
-    r = http.session().get(url, timeout=90)
-    time.sleep(DELAY)
-    if r.status_code == 404:
-        print(f"WARN {url}: 404, listed in the sitemap but gone", flush=True)
-        return None
-    r.raise_for_status()
-    return url, r.text
+    """(url, html), or None when the product is gone (404). Other failures raise.
+
+    A 200 page with no product on it is fetched again after NOT_PRODUCT_WAITS (11-19 to 11-21 a
+    different product page each day, after 50 to 200 pages, came back like that to GitHub's runner
+    and stopped the whole run, though the same page was fine before and after). Still no product
+    after the last wait: it raises as before, never a run with a product left out (the master
+    table would list it as gone)."""
+    for wait in (*NOT_PRODUCT_WAITS, None):
+        r = http.session().get(url, timeout=90)
+        time.sleep(DELAY)
+        if r.status_code == 404:
+            print(f"WARN {url}: 404, listed in the sitemap but gone", flush=True)
+            return None
+        r.raise_for_status()
+        if is_product_page(r.text):
+            return url, r.text
+        title = re.search(r"<title[^>]*>([^<]*)", r.text, re.I)
+        what = f"{r.status_code}, title {clean(title.group(1))[:80]!r}" if title else f"{r.status_code}, no title"
+        what += f", {len(r.text)} bytes, starts {clean(r.text[:120])!r}"
+        if wait is None:
+            raise RuntimeError(f"{url}: no product on the page after {len(NOT_PRODUCT_WAITS)} retries ({what})")
+        print(f"WARN {url}: no product on the page ({what}); trying again in {wait}s", flush=True)
+        time.sleep(wait)
 
 
 def num(value):
