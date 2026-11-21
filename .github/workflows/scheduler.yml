@@ -1,4 +1,6 @@
 name: Scheduler
+run-name: >-
+  Scheduler ${{ inputs.only && format('only {0}', inputs.only) || (github.event.schedule == '0 12 * * *' && 'evening' || inputs.slot || 'morning') }}
 
 # ONE scheduler per account. At 05:17 Asia/Karachi (00:17 UTC) it reads ops/scrape_schedule.json,
 # takes the sites THIS account owns, and dispatches them spread over the next 5 hours
@@ -11,6 +13,13 @@ name: Scheduler
 #
 # A second run at 17:00 Asia/Karachi dispatches only the sites with "slot": "evening" in
 # scrape_schedule.json (our own store, read after the US IT pricing job has changed its prices).
+#
+# On time (2026-11-21): GitHub starts scheduled runs late, about 1 h on most accounts and about 7 h
+# on 3 of them (11-20 and 11-21). A dispatched run starts within seconds, so an outside timer (the
+# scrapers' n8n, "Scrapers - Scheduler on time") dispatches this workflow with `slot` at 05:17 and
+# 17:00 PKT on every account. The crons below stay as the backup: a run finds the same slot already
+# started in the last 20 hours and dispatches nothing (ops/dispatch_schedule.py), so no store is
+# scraped twice. The run's name says its slot ("Scheduler morning"), which that check reads.
 
 on:
   schedule:
@@ -25,6 +34,12 @@ on:
         description: "Comma-separated site keys to dispatch now (blank = all this account's sites)"
         required: false
         default: ""
+      slot:
+        description: "Which sites: morning (05:17 PKT) or evening (17:00 PKT)"
+        required: false
+        default: "morning"
+        type: choice
+        options: [morning, evening]
 
 permissions:
   actions: write
@@ -53,5 +68,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           ONLY: ${{ inputs.only }}
-          SLOT: ${{ github.event.schedule == '0 12 * * *' && 'evening' || 'morning' }}
+          SLOT: ${{ github.event.schedule == '0 12 * * *' && 'evening' || inputs.slot || 'morning' }}
         run: python -u ops/dispatch_schedule.py

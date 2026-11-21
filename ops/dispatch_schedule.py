@@ -1,6 +1,7 @@
 """Dispatch this account's scrapers, spread across the morning window.
 
-Run by scheduler.yml once at 05:17 PKT. It reads ops/scrape_schedule.json (the site -> owner map),
+Run by scheduler.yml at 05:17 PKT (dispatched on time by the scrapers' n8n; GitHub's own late cron
+is the backup and dispatches nothing once the slot has started, see slot_started). It reads ops/scrape_schedule.json (the site -> owner map),
 takes the sites this account owns (heaviest first), and dispatches them one by one with a gap
 between, so they start spread over the next 5 hours instead of all at once. Most sites run
 through the shared scrape.yml (dispatched with the site key); a few keep their own workflow (the
@@ -62,6 +63,37 @@ def started_today(site):
         return False
     return any(x.get("display_title") == f"Scrape {site}" and x.get("conclusion") in (None, "success") for x in runs)
 
+
+def slot_started(hours=20):
+    """An earlier Scheduler run of this slot, started in the last `hours`, that did not fail.
+
+    2026-11-21: GitHub starts scheduled runs late (about 7 h on 3 accounts on 11-20 and 11-21), so the
+    scrapers' n8n dispatches this workflow on time at 05:17 and 17:00 PKT and the crons are only the
+    backup. The late cron run then finds the slot already started and dispatches nothing, so no store
+    is scraped twice. Same slots are 24 h apart, so 20 h never reaches the day before. Only earlier
+    runs count (a smaller run id): a later one waiting behind this run (same concurrency group) must
+    not stop it. If GitHub cannot be asked, the run goes ahead."""
+    me = int(os.getenv("GITHUB_RUN_ID") or 0)
+    since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - hours * 3600))
+    url = f"https://api.github.com/repos/{REPO}/actions/workflows/scheduler.yml/runs"
+    try:
+        r = requests.get(url, headers=hdr, params={"created": f">={since}", "per_page": 100}, timeout=30)
+        runs = r.json().get("workflow_runs", []) if r.status_code == 200 else []
+    except (requests.RequestException, ValueError):
+        return None
+    for x in runs:
+        if (x.get("display_title") == f"Scheduler {SLOT}" and x.get("id", 0) < me
+                and x.get("conclusion") in (None, "success")):
+            return x
+    return None
+
+
+if not ONLY:
+    earlier = slot_started()
+    if earlier:
+        print(f"the {SLOT} slot already started at {earlier.get('created_at')} "
+              f"({earlier.get('event')} run {earlier.get('id')}): nothing to dispatch")
+        raise SystemExit(0)
 
 if SLOT == "evening" and not ONLY:
     before = len(mine)
