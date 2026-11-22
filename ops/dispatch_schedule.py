@@ -5,7 +5,10 @@ is the backup and dispatches nothing once the slot has started, see slot_started
 takes the sites this account owns (heaviest first), and dispatches them one by one with a gap
 between, so they start spread over the next 5 hours instead of all at once. Most sites run
 through the shared scrape.yml (dispatched with the site key); a few keep their own workflow (the
-"wf" field). Uses the built-in GITHUB_TOKEN (needs actions: write).
+"wf" field). A site with "full_on" (a weekday, e.g. "Sun", Pakistan time) gets its workflow's
+full=1 input that day: aztekc's weekly real-stock pass (2026-11-22; its own Sunday cron had stopped
+asking for the full pass when the times moved on 10-22, and GitHub started it hours late).
+Uses the built-in GITHUB_TOKEN (needs actions: write).
 
 Env: GITHUB_REPOSITORY, GITHUB_REPOSITORY_OWNER, GITHUB_TOKEN (all set by Actions); ONLY = optional
 comma-separated site keys to dispatch instead of the whole account (for testing); SLOT = "morning"
@@ -34,6 +37,8 @@ SLOT_UTC = {"morning": (0, 17), "evening": (12, 0)}   # scheduler.yml's crons an
 SLOT_MARGIN = timedelta(hours=1)                      # a round begins this long before its time
 WINDOW_SEC = 300 * 60           # spread over 5 h from the start (05:17-10:17 PKT when GitHub is on time)
 MAX_GAP = 20 * 60
+# Today's weekday in Pakistan time ("Sun"), for a site's "full_on" day
+TODAY = time.strftime("%a", time.gmtime(time.time() + 5 * 3600))
 
 sched = json.loads((pathlib.Path(__file__).resolve().parent.parent / "ops/scrape_schedule.json").read_text())
 mine = [(s, v) for s, v in sched.items() if v.get("owner") == OWNER]
@@ -128,10 +133,13 @@ for i, (site, v) in enumerate(mine):
     body = {"ref": "main"}
     if wf == "scrape":
         body["inputs"] = {"site": site}
+    elif v.get("full_on") == TODAY:
+        body["inputs"] = {"full": "1"}
     url = f"https://api.github.com/repos/{REPO}/actions/workflows/{wf}.yml/dispatches"
     try:
         r = requests.post(url, headers=hdr, json=body, timeout=30)
-        print(f"  {'ok ' if r.status_code == 204 else 'ERR ' + str(r.status_code)} {site} ({wf})",
+        print(f"  {'ok ' if r.status_code == 204 else 'ERR ' + str(r.status_code)} {site} "
+              f"({wf}{', full' if body.get('inputs', {}).get('full') else ''})",
               flush=True)
     except requests.RequestException as e:
         print(f"  ERR {site}: {type(e).__name__}", flush=True)

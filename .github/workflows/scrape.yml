@@ -4,7 +4,7 @@ run-name: Scrape ${{ inputs.site }}
 # One shared scraper workflow for every standard site, instead of a workflow file per site. The
 # scheduler (scheduler.yml) dispatches this once per site with the site's key; it runs that site's
 # scraper (python -m <site>.scrape). Sites that need extra settings (directmacro's QA step,
-# wearesync's MAX_PAGES, gotodirect's shards, servertechcentral, aztekc) keep their own workflow.
+# wearesync's MAX_PAGES, aztekc) keep their own workflow.
 # Run one by hand from the Actions tab with the site key, or let the scheduler drive it.
 
 on:

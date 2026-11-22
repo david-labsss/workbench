@@ -52,7 +52,7 @@
   "fs.com": "Blocked (Akamai)",
   "g5networkgroup.com": "Quote-only (no public price)",
   "galaxus.de": "Blocked (Akamai)",
-  "gotodirect.com": "On hold (needs sharding)",
+  "gotodirect.com": "Dropped (too big: ~977k products, never saved a run)",
   "greenwaveelectronics.com": "Dropped (not server parts: security / fire)",
   "happyware.com": "Building",
   "harddrivesdirect.com": "Blocked (Cloudflare)",
