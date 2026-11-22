@@ -7,7 +7,7 @@ name: QA in a browser
 # Daily an hour after the dashboard's QA (10:30 PKT), on one account; by hand on any.
 on:
   schedule:
-    - cron: "30 5 * * *"      # 10:30 Asia/Karachi — after the morning scrape window
+    - cron: "30 5 * * *"      # 10:30 Asia/Karachi: the backup; n8n starts it on time (2026-11-22)
   workflow_dispatch:
     inputs:
       sites:
@@ -23,10 +23,34 @@ on:
         required: false
         default: ""
 
+permissions:
+  actions: read      # once_per_round.py lists this workflow's runs
+  contents: read
+
 jobs:
-  qa:
-    # The code is published to several accounts; the daily run happens on one of them.
+  once:
+    # The scrapers' n8n starts this job on time (GitHub's cron started it hours late); a scheduled
+    # run after that does nothing (ops/once_per_round.py). Dispatched runs always go ahead.
+    runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || github.repository_owner == 'Adam-lab-maker'
+    timeout-minutes: 5
+    outputs:
+      skip: ${{ steps.once.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: ops
+      - id: once
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          WORKFLOW: browser-qa.yml
+          ROUND_UTC: "05:30"
+        run: python3 -u ops/once_per_round.py
+
+  qa:
+    # The code is published to several accounts; the daily run happens on one of them (the once job).
+    needs: once
+    if: needs.once.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:

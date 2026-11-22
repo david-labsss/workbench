@@ -1,21 +1,47 @@
 name: Update Scrape Status
 
 # Writes the competitor-discovery sheet's "Scrape status" column (R) once a day.
-# This file is published to every account's workbench repo, but the job is guarded to run ONLY in
-# Aaron-labbss/workbench, so it runs once a day (the other repos' scheduled runs skip immediately).
-# Needs one repo secret in Aaron-labbss/workbench: GOOGLE_SA_JSON (the Google service-account key).
+# This file is published to every account's workbench repo, but the job runs ONLY in
+# Adam-lab-maker/workbench (moved from the suspended Aaron-labbss on 2026-11-22), so it runs once a
+# day (the other repos' runs skip immediately). Needs the repo secret GOOGLE_SA_JSON (the Google
+# service-account key) there; DATABASE_URL is the scrapers' own secret.
 on:
   schedule:
-    - cron: "0 4 * * *"   # daily 04:00 UTC (~09:00 PKT), after the morning scrapes
+    - cron: "0 4 * * *"   # daily 04:00 UTC (09:00 PKT): the backup; n8n starts it on time (2026-11-22)
   workflow_dispatch: {}
 
 concurrency:
   group: update-scrape-status
   cancel-in-progress: false
 
+permissions:
+  actions: read      # once_per_round.py lists this workflow's runs
+  contents: read
+
 jobs:
+  once:
+    # The scrapers' n8n starts this job on time (GitHub's cron started it hours late); a scheduled
+    # run after that does nothing (ops/once_per_round.py). Dispatched runs always go ahead.
+    runs-on: ubuntu-latest
+    if: github.repository_owner == 'Adam-lab-maker'
+    timeout-minutes: 5
+    outputs:
+      skip: ${{ steps.once.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: ops
+      - id: once
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          WORKFLOW: update-scrape-status.yml
+          ROUND_UTC: "04:00"
+        run: python3 -u ops/once_per_round.py
+
   update:
-    if: github.repository == 'Aaron-labbss/workbench'
+    # Only Adam-lab-maker holds the GOOGLE_SA_JSON secret (moved from the suspended Aaron-labbss, 2026-11-22)
+    needs: once
+    if: needs.once.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -32,4 +58,6 @@ jobs:
       - name: Update the Scrape status column
         env:
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          # scrape_runs, read for "Not saving since ..." (a store with no save for 36 h)
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python -I ops/update_scrape_status.py
