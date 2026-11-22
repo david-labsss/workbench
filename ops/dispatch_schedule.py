@@ -21,6 +21,7 @@ import json
 import os
 import pathlib
 import time
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -29,6 +30,8 @@ REPO = os.environ["GITHUB_REPOSITORY"]
 TOKEN = os.environ["GITHUB_TOKEN"]
 ONLY = {s.strip() for s in os.getenv("ONLY", "").split(",") if s.strip()}
 SLOT = os.getenv("SLOT") or "morning"
+SLOT_UTC = {"morning": (0, 17), "evening": (12, 0)}   # scheduler.yml's crons and n8n: 05:17 and 17:00 PKT
+SLOT_MARGIN = timedelta(hours=1)                      # a round begins this long before its time
 WINDOW_SEC = 300 * 60           # spread over 5 h from the start (05:17-10:17 PKT when GitHub is on time)
 MAX_GAP = 20 * 60
 
@@ -64,17 +67,30 @@ def started_today(site):
     return any(x.get("display_title") == f"Scrape {site}" and x.get("conclusion") in (None, "success") for x in runs)
 
 
-def slot_started(hours=20):
-    """An earlier Scheduler run of this slot, started in the last `hours`, that did not fail.
+def slot_since(now=None):
+    """When this slot's current round began: its time today (SLOT_UTC) less SLOT_MARGIN, or yesterday's
+    when that is still ahead (a run a little early, or a late backup after midnight UTC)."""
+    now = now or datetime.now(timezone.utc)
+    h, m = SLOT_UTC[SLOT]
+    start = now.replace(hour=h, minute=m, second=0, microsecond=0) - SLOT_MARGIN
+    return start - timedelta(days=1) if start > now else start
+
+
+def slot_started(now=None):
+    """An earlier Scheduler run of this slot, started since this round began (slot_since), that did not fail.
 
     2026-11-21: GitHub starts scheduled runs late (about 7 h on 3 accounts on 11-20 and 11-21), so the
     scrapers' n8n dispatches this workflow on time at 05:17 and 17:00 PKT and the crons are only the
     backup. The late cron run then finds the slot already started and dispatches nothing, so no store
-    is scraped twice. Same slots are 24 h apart, so 20 h never reaches the day before. Only earlier
-    runs count (a smaller run id): a later one waiting behind this run (same concurrency group) must
-    not stop it. If GitHub cannot be asked, the run goes ahead."""
+    is scraped twice. Only earlier runs count (a smaller run id): a later one waiting behind this run
+    (same concurrency group) must not stop it. If GitHub cannot be asked, the run goes ahead.
+
+    2026-11-22: it looked back 20 h, which reached the day before's LATE backup (11-21 23:47 PKT): the
+    17:00 PKT round of 11-22 dispatched nothing, and every account's 05:17 round of 11-23 would have
+    found 11-22's backups (11:42 AM-12:04 PM PKT, about 17 h before). It now looks back only to this
+    round's own start, so the day before never counts."""
     me = int(os.getenv("GITHUB_RUN_ID") or 0)
-    since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - hours * 3600))
+    since = slot_since(now).strftime("%Y-%m-%dT%H:%M:%SZ")
     url = f"https://api.github.com/repos/{REPO}/actions/workflows/scheduler.yml/runs"
     try:
         r = requests.get(url, headers=hdr, params={"created": f">={since}", "per_page": 100}, timeout=30)
