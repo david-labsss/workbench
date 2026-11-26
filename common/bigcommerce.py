@@ -67,13 +67,19 @@ query($first: Int!, $after: String) {
 }"""
 
 
-def token(base):
-    r = http.session().get(base + "/", timeout=30)
-    r.raise_for_status()
-    m = TOKEN_RE.search(r.text)
-    if not m:
-        raise RuntimeError(f"no storefront API token in {base}'s HTML")
-    return m.group(0)
+def token(base, tries=4, wait=30):
+    """The storefront token from the home page. Tries again when the page comes back without
+    it (storagepartsdirect 11-26 9:54 AM PKT: no token; the same page had it at about 3 PM)."""
+    for attempt in range(1, tries + 1):
+        r = http.get(base + "/", timeout=30)
+        m = TOKEN_RE.search(r.text)
+        if m:
+            return m.group(0)
+        if attempt < tries:
+            print(f"no storefront token in {base}'s HTML ({len(r.text)} bytes, try {attempt} "
+                  f"of {tries}); waiting {wait * attempt}s", flush=True)
+            time.sleep(wait * attempt)
+    raise RuntimeError(f"no storefront API token in {base}'s HTML")
 
 
 def fetch_products(base, limit=0):

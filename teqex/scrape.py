@@ -271,8 +271,12 @@ def scrape(limit, scraped_at):
     rows = list(seen.values())
     if limit:
         return rows[:limit], None
-    return rows, root_total
+    # The site's total_count also counts products its pages never return (11-26 test: price
+    # 100-300 says 5,750, its pages give 5,420 unique, no repeats), and that gap grows and
+    # shrinks (11-25 98.6%, 11-26 97.4% of 37,809). So the run is not compared with it; it must
+    # reach 95% of the last full run instead (min_of_previous below).
+    return rows, None
 
 
 if __name__ == "__main__":
-    runner.run(SITE, scrape)
+    runner.run(SITE, scrape, min_of_previous=0.95)

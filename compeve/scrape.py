@@ -53,9 +53,9 @@ def listing_url(page):
 
 
 def get(url):
-    r = http.session().get(url, timeout=90)
-    r.raise_for_status()
-    return r.text
+    # http.get retries a page whose body breaks off (11-24 page 409, 11-26 page 499:
+    # "Response ended prematurely") before the run gives up.
+    return http.get(url, timeout=90).text
 
 
 def parse_page(html, scraped_at):

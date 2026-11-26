@@ -25,6 +25,8 @@ import html
 import re
 import time
 
+import requests
+
 from common import http, schema
 
 STORE_PRODUCTS = "/wp-json/wc/store/v1/products"
@@ -73,20 +75,39 @@ def _names(items):
     return out
 
 
-def fetch_products(base, limit=0, per_page=PAGE, delay=PAGE_DELAY, params=None):
+def _get_page(base, query, retry_403, route):
+    """One Store API page. route[0] is the address in use: the /wp-json/ path, or WordPress's
+    plain ?rest_route= form, which still works when a store's /wp-json/ path is switched off
+    (ckmserver 11-26: /wp-json/ 404, ?rest_route= 200). Switches once, on a 404."""
+    while True:
+        if route[0] == "plain":
+            url, q = base + "/", {"rest_route": STORE_PRODUCTS[len("/wp-json"):], **query}
+        else:
+            url, q = base + STORE_PRODUCTS, query
+        try:
+            return http.get(url, params=q, timeout=60, retry_403=retry_403)
+        except requests.HTTPError as e:
+            if route[0] == "pretty" and e.response is not None and e.response.status_code == 404:
+                print(f"{base}{STORE_PRODUCTS} answered 404; using ?rest_route= instead",
+                      flush=True)
+                route[0] = "plain"
+                continue
+            raise
+
+
+def fetch_products(base, limit=0, per_page=PAGE, delay=PAGE_DELAY, params=None, retry_403=False):
     """Every product from the Store API as a list of dicts, paging until a page is empty.
     Returns (products, listed) where listed is the X-WP-Total the store reports. A failed
-    page raises (common/http retries 429/5xx first): it must never look like the end."""
-    products, listed, page = [], None, 1
+    page raises (common/http retries 429/5xx, dropped pages and timeouts first; and a 403 when
+    retry_403): it must never look like the end."""
+    products, listed, page, route = [], None, 1, ["pretty"]
     while True:
         # Fetch this page, retrying a non-JSON 200 (an intermittent HTML/empty error or a CDN
         # interstitial): .json() would otherwise raise and look like the end of the catalogue.
         batch = None
         for attempt in range(6):
-            r = http.session().get(base + STORE_PRODUCTS,
-                                   params={"per_page": per_page, "page": page, **(params or {})},
-                                   timeout=60)
-            r.raise_for_status()
+            r = _get_page(base, {"per_page": per_page, "page": page, **(params or {})},
+                          retry_403, route)
             if listed is None:
                 try:
                     listed = int(r.headers.get("X-WP-Total"))
